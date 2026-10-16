@@ -19,7 +19,7 @@ create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations(id) on delete cascade,
   order_number text not null,
-  portal text not null check (portal in ('TempoCerto', 'Trizy', 'Nexello')),
+  portal text not null check (length(trim(portal)) between 1 and 60),
   scheduled_at timestamptz,
   status text not null default 'Pendente' check (status in ('Agendado', 'Pendente', 'Falhou')),
   created_at timestamptz not null default now()
@@ -28,15 +28,44 @@ create index if not exists orders_org_created_idx on public.orders (organization
 
 create table if not exists public.organization_portals (
   organization_id uuid not null references public.organizations(id) on delete cascade,
-  portal text not null check (portal in ('TempoCerto', 'Trizy', 'Nexello')),
+  portal text not null check (length(trim(portal)) between 1 and 60),
+  portal_url text not null,
+  description text not null default '',
+  constraint organization_portals_url_http_check check (portal_url ~* '^https?://'),
   active boolean not null default true,
   updated_at timestamptz not null default now(),
   primary key (organization_id, portal)
 );
 
+create table if not exists public.clients (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  legal_name text not null check (length(trim(legal_name)) between 1 and 160),
+  trade_name text not null check (length(trim(trade_name)) between 1 and 120),
+  cnpj text not null check (cnpj ~ '^[A-Z0-9]{14}$'),
+  email text not null check (length(trim(email)) between 3 and 254),
+  phone text not null check (length(trim(phone)) between 1 and 30),
+  portal text not null,
+  created_at timestamptz not null default now(),
+  constraint clients_org_cnpj_unique unique (organization_id, cnpj),
+  constraint clients_org_id_unique unique (organization_id, id),
+  constraint clients_org_portal_fk foreign key (organization_id, portal)
+    references public.organization_portals (organization_id, portal) on delete restrict
+);
+create index if not exists clients_org_trade_name_idx on public.clients (organization_id, trade_name);
+
+-- Pedidos antigos permanecem válidos sem cliente vinculado.
+alter table public.orders add column if not exists client_id uuid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'orders_org_client_fk') then
+    alter table public.orders add constraint orders_org_client_fk
+      foreign key (organization_id, client_id) references public.clients (organization_id, id) on delete restrict;
+  end if;
+end $$;
+
 create table if not exists public.portal_credentials (
   organization_id uuid not null references public.organizations(id) on delete cascade,
-  portal text not null check (portal in ('TempoCerto', 'Trizy', 'Nexello')),
+  portal text not null check (length(trim(portal)) between 1 and 60),
   username_ciphertext text not null,
   password_ciphertext text not null,
   updated_at timestamptz not null default now(),
@@ -49,8 +78,10 @@ declare org_id uuid;
 begin
   insert into public.organizations (name) values (coalesce(nullif(split_part(new.email, '@', 1), ''), 'Minha empresa')) returning id into org_id;
   insert into public.organization_members (organization_id, user_id, role) values (org_id, new.id, 'owner');
-  insert into public.organization_portals (organization_id, portal, active) values
-    (org_id, 'TempoCerto', true), (org_id, 'Trizy', true), (org_id, 'Nexello', true);
+  insert into public.organization_portals (organization_id, portal, portal_url, description, active) values
+    (org_id, 'TempoCerto', 'https://tempocerto.com/', 'Agendamento de cargas', true),
+    (org_id, 'Trizy', 'https://www.trizy.com.br/', 'Gestão logística', true),
+    (org_id, 'Nexello', 'https://portal.nexello.com.br/', 'Portal de agendamentos', true);
   return new;
 end;
 $$;
@@ -67,6 +98,7 @@ alter table public.organizations enable row level security;
 alter table public.organization_members enable row level security;
 alter table public.orders enable row level security;
 alter table public.organization_portals enable row level security;
+alter table public.clients enable row level security;
 alter table public.portal_credentials enable row level security;
 
 create policy "Members can view their organizations" on public.organizations for select to authenticated using (public.is_org_member(id));
@@ -74,6 +106,9 @@ create policy "Members can view organization membership" on public.organization_
 create policy "Members can read organization portals" on public.organization_portals for select to authenticated using (public.is_org_member(organization_id));
 create policy "Members can add organization portals" on public.organization_portals for insert to authenticated with check (public.is_org_member(organization_id));
 create policy "Members can update organization portals" on public.organization_portals for update to authenticated using (public.is_org_member(organization_id)) with check (public.is_org_member(organization_id));
+create policy "Members can read organization clients" on public.clients for select to authenticated using (public.is_org_member(organization_id));
+create policy "Members can add organization clients" on public.clients for insert to authenticated with check (public.is_org_member(organization_id));
+create policy "Members can update organization clients" on public.clients for update to authenticated using (public.is_org_member(organization_id)) with check (public.is_org_member(organization_id));
 create policy "Members can read organization orders" on public.orders for select to authenticated using (public.is_org_member(organization_id));
 create policy "Members can add organization orders" on public.orders for insert to authenticated with check (public.is_org_member(organization_id));
 create policy "Members can update organization orders" on public.orders for update to authenticated using (public.is_org_member(organization_id)) with check (public.is_org_member(organization_id));
@@ -84,5 +119,6 @@ grant usage on schema public to authenticated;
 grant select on public.organizations, public.organization_members to authenticated;
 grant select, insert, update, delete on public.orders to authenticated;
 grant select, insert, update on public.organization_portals to authenticated;
+grant select, insert, update on public.clients to authenticated;
 revoke all on public.portal_credentials from anon, authenticated;
 grant all on public.portal_credentials to service_role;

@@ -24,10 +24,14 @@ Para publicar na Vercel, configure as variáveis do Supabase e `PORTAL_CREDENTIA
 - Cadastro e login por e-mail e senha.
 - Dashboard com indicadores operacionais.
 - Módulo Integrações com cadastro e filtro de pedidos por portal/status.
-- Módulo Portais com ativação e desativação por organização; preferências persistidas na tabela `organization_portals`.
+- Importação de XML no módulo Integrações: leitura no navegador dos CNPJs e de um possível número do pedido, correspondência com cliente cadastrado e gravação do pedido com o portal padrão. O XML não é armazenado; formatos específicos de cada emissor podem exigir ajustes nos nomes de campos reconhecidos.
+- Seleção de vários pedidos e ação em massa agrupada pelo portal de cada pedido; a ação abre o painel correspondente para conclusão manual.
+- Módulo Portais com cadastro de novos portais (nome, endereço e descrição), além de ativação e configuração de acesso por organização. O catálogo fica em `organization_portals`.
+- Módulo Clientes com razão social, nome fantasia, CNPJ, e-mail, telefone e portal padrão. O pedido guarda o cliente relacionado e sugere o portal padrão dele.
 - Configuração de usuário e senha por portal; os valores são criptografados no servidor antes de serem salvos em `portal_credentials`. A chave `service_role` fica somente no servidor, e a interface exibe apenas se o acesso foi configurado.
 - A ação Publicar abre o portal escolhido em outra aba; o agendamento é concluído manualmente no painel.
-- Relatórios e integrações via API ficam para as fases seguintes.
+- Relatórios com filtros por portal e período, indicadores por status e exportação CSV. Os dados refletem os status atuais dos pedidos; a publicação ainda é manual.
+- Integrações automáticas via API ficam para a fase seguinte.
 
 ## Preparar a publicação na Vercel
 
@@ -39,7 +43,7 @@ O projeto usa Next.js com App Router; a Vercel detecta o framework automaticamen
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY` como segredo do servidor
    - `PORTAL_CREDENTIALS_ENCRYPTION_KEY` como segredo do servidor
-3. Use um projeto/banco Supabase de produção. Execute `supabase/schema.sql` em um banco novo; se estiver atualizando o MVP existente, aplique as migrações em ordem. Não exponha `SUPABASE_SERVICE_ROLE_KEY` nem a chave de criptografia com prefixo `NEXT_PUBLIC_`.
+3. Use um projeto/banco Supabase de produção. Execute `supabase/schema.sql` em um banco novo; se estiver atualizando o MVP existente, aplique todas as migrações em `supabase/migrations/` em ordem. A migração `202610150004_clients.sql` cria clientes e liga os pedidos ao cliente da mesma organização. Não exponha `SUPABASE_SERVICE_ROLE_KEY` nem a chave de criptografia com prefixo `NEXT_PUBLIC_`.
 4. Configure no Supabase a URL pública do site e os URLs permitidos para autenticação usando o domínio Vercel escolhido.
 5. Faça um Preview Deploy primeiro, confirme login, leitura/gravação de pedidos e armazenamento de credenciais, e então promova pelo fluxo do Git/Vercel.
 
