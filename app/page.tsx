@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from './lib/supabase';
-import { Activity, ArrowRight, ArrowUpRight, CalendarDays, Check, ChevronDown, CircleHelp, Clock3, Download, Edit2, ExternalLink, FileBarChart2, FileUp, LayoutDashboard, LogOut, Menu, Plus, Search, Settings2, ShieldCheck, Truck, Users, X } from 'lucide-react';
+import { Activity, ArrowRight, ArrowUpRight, CalendarDays, Check, ChevronDown, CircleHelp, Clock3, Download, Edit2, ExternalLink, FileBarChart2, FileUp, LayoutDashboard, LogOut, Mail, Menu, Plus, Search, Settings2, ShieldCheck, Sparkles, Truck, Users, X } from 'lucide-react';
 
 type Portal = string;
 type Module = 'overview' | 'integrations' | 'clients' | 'portals' | 'reports';
@@ -12,10 +12,27 @@ const INITIAL_PORTALS: PortalDefinition[] = [
   { name: 'Trizy', description: 'Gestão logística', url: 'https://www.trizy.com.br/', short: 'T', tone: 'orange' },
   { name: 'Nexello', description: 'Portal de agendamentos', url: 'https://portal.nexello.com.br/', short: 'N', tone: 'navy' },
 ];
-type Client = { id: string; legal_name: string; trade_name: string; cnpj: string; email: string; phone: string; portal: Portal };
-type Order = { id: string; order_number: string; client_id: string | null; portal: Portal; scheduled_at: string | null; status: 'Agendado' | 'Pendente' | 'Falhou'; created_at: string };
+type Client = { id: string; legal_name: string; trade_name: string; cnpj: string; email: string; phone: string; portal: Portal; notification_recipients?: string[]; notification_cc?: string[]; notification_subject?: string; notification_body?: string };
+type Order = { id: string; order_number: string; client_id: string | null; portal: Portal; scheduled_at: string | null; status: 'Agendado' | 'Pendente' | 'Falhou'; created_at: string; xml_order_number?: string | null; xml_item_count?: number | null; xml_item_quantity?: number | null; xml_purchase_order?: string | null };
+type OrderXmlDetails = { orderNumber: string; itemCount: number; itemQuantity: number; purchaseOrder: string };
+type ImportFilters = { order: string; cnpj: string; client: string; group: string; seller: string; scheduled: string };
+type ImportOrderRow = { id: string; values: Record<string, string>; order_number: string; client_id: string; portal: Portal; group: string; seller: string; scheduled: string; scheduled_at: string | null; selected: boolean; issue: string };
 
 function normalizeCnpj(value: string) { return value.normalize('NFD').replace(/[^a-zA-Z0-9]/g, '').toUpperCase(); }
+function normalizeSpreadsheetText(value:string) { return value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' '); }
+function findSpreadsheetHeader(columns:string[],aliases:string[]) { const normalized=columns.map(column=>normalizeSpreadsheetText(column)); for(const alias of aliases){const index=normalized.findIndex(column=>column===normalizeSpreadsheetText(alias));if(index>=0)return columns[index];} return ''; }
+function parseSpreadsheetDate(value:string):Date|null { const input=value.trim(); if(!input)return null; const br=input.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/); if(br){let year=Number(br[3]);if(year<100)year+=year<50?2000:1900;const date=new Date(year,Number(br[2])-1,Number(br[1]),Number(br[4]||0),Number(br[5]||0),Number(br[6]||0));return date.getFullYear()===year&&date.getMonth()===Number(br[2])-1&&date.getDate()===Number(br[1])?date:null;} const iso=input.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);if(iso){const date=new Date(Number(iso[1]),Number(iso[2])-1,Number(iso[3]),Number(iso[4]||0),Number(iso[5]||0),Number(iso[6]||0));return date.getFullYear()===Number(iso[1])&&date.getMonth()===Number(iso[2])-1&&date.getDate()===Number(iso[3])?date:null;}const parsed=new Date(input);return Number.isNaN(parsed.getTime())?null:parsed; }
+function extractXmlOrderDetails(documentXml:Document):OrderXmlDetails {
+  const nodes=Array.from(documentXml.getElementsByTagName('*'));
+  const matchingText=(names:string[])=>nodes.find(node=>names.includes(node.localName.toLowerCase())&&node.textContent?.trim())?.textContent?.trim()||'';
+  const orderNumber=matchingText(['nped','numeropedido','numpedido','pedido','numero','nnf','nct','ndf'])||matchingText(['xped']);
+  const details=nodes.filter(node=>node.localName.toLowerCase()==='det');
+  const quantities=details.map(detail=>Array.from(detail.getElementsByTagName('*')).find(node=>node.localName.toLowerCase()==='qcom')?.textContent?.trim()||'').filter(Boolean).map(value=>Number(value.replace(/\s/g,'').replace(',','.'))).filter(value=>Number.isFinite(value)&&value>=0);
+  const observations=nodes.filter(node=>['infcpl','infadprod'].includes(normalizeSpreadsheetText(node.localName))&&node.textContent?.trim()).map(node=>node.textContent!.trim()).join('\n');
+  const purchaseMatch=observations.match(/(?:ordem\s+de\s+compra|pedido\s+de\s+compra|ordem\s+compra|ordem\s+de\s+comp\.?|\boc\b|o\.?c\.?|purchase\s+order|\bpo\b)\s*(?:n[º°o.]?\s*)?[:#=\-]?\s*([a-z0-9][a-z0-9._/\-]*)/i);
+  const purchaseOrder=purchaseMatch?.[1]||matchingText(['xped']);
+  return { orderNumber, itemCount:details.length||quantities.length, itemQuantity:quantities.reduce((sum,value)=>sum+value,0), purchaseOrder };
+}
 
 const initialOrders: Order[] = [
   { id: '1', order_number: 'PED-2024-0842', client_id: 'demo-client-1', portal: 'TempoCerto', scheduled_at: '2026-10-16T09:30:00', status: 'Agendado', created_at: '2026-10-15T09:24:00' },
@@ -52,6 +69,9 @@ export default function Home() {
   const [savingClient, setSavingClient] = useState(false);
   const [clientFormError, setClientFormError] = useState('');
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
+  const [emailTemplateClient, setEmailTemplateClient] = useState<Client | null>(null);
+  const [savingEmailTemplate, setSavingEmailTemplate] = useState(false);
+  const [emailTemplateError, setEmailTemplateError] = useState('');
   const [clientQuery, setClientQuery] = useState('');
   const [loginOpen, setLoginOpen] = useState(true);
   const [loginMode, setLoginMode] = useState(false);
@@ -63,7 +83,27 @@ export default function Home() {
   const [xmlImportError, setXmlImportError] = useState('');
   const [xmlClientId, setXmlClientId] = useState('');
   const [xmlOrderNumber, setXmlOrderNumber] = useState('');
+  const [xmlNewOrderDetails, setXmlNewOrderDetails] = useState<OrderXmlDetails>({ orderNumber: '', itemCount: 0, itemQuantity: 0, purchaseOrder: '' });
   const xmlInputRef = useRef<HTMLInputElement>(null);
+  const [orderXmlTarget, setOrderXmlTarget] = useState<Order | null>(null);
+  const [orderXmlFileName, setOrderXmlFileName] = useState('');
+  const [orderXmlDraft, setOrderXmlDraft] = useState<OrderXmlDetails>({ orderNumber: '', itemCount: 0, itemQuantity: 0, purchaseOrder: '' });
+  const [orderXmlError, setOrderXmlError] = useState('');
+  const [savingOrderXml, setSavingOrderXml] = useState(false);
+  const orderXmlInputRef = useRef<HTMLInputElement>(null);
+  const [showSpreadsheetImport, setShowSpreadsheetImport] = useState(false);
+  const [spreadsheetBusy, setSpreadsheetBusy] = useState(false);
+  const [spreadsheetError, setSpreadsheetError] = useState('');
+  const [spreadsheetFileName, setSpreadsheetFileName] = useState('');
+  const [spreadsheetSheetName, setSpreadsheetSheetName] = useState('');
+  const [spreadsheetColumns, setSpreadsheetColumns] = useState<string[]>([]);
+  const [spreadsheetRawRows, setSpreadsheetRawRows] = useState<Record<string, string>[]>([]);
+  const [spreadsheetFilters, setSpreadsheetFilters] = useState({ group: 'Todos', seller: 'Todos', scheduled: '' });
+  const [spreadsheetMappings, setSpreadsheetMappings] = useState<ImportFilters>({ order: '', cnpj: '', client: '', group: '', seller: '', scheduled: '' });
+  const [spreadsheetSelectedIds, setSpreadsheetSelectedIds] = useState<string[]>([]);
+  const [spreadsheetClientOverrides, setSpreadsheetClientOverrides] = useState<Record<string, string>>({});
+  const [savingSpreadsheetOrders, setSavingSpreadsheetOrders] = useState(false);
+  const spreadsheetInputRef = useRef<HTMLInputElement>(null);
   const [toast, setToast] = useState('');
   const [query, setQuery] = useState('');
   const [portalFilter, setPortalFilter] = useState('Todos os portais');
@@ -110,8 +150,13 @@ export default function Home() {
         return [...INITIAL_PORTALS.map(defaultPortal => saved.find(portal => portal.name === defaultPortal.name) || defaultPortal), ...saved.filter(portal => !INITIAL_PORTALS.some(defaultPortal => defaultPortal.name === portal.name))];
       });
     }
-    const { data: clientRows, error: clientsError } = await supabase.from('clients').select('id, legal_name, trade_name, cnpj, email, phone, portal').eq('organization_id', memberships[0].organization_id).order('trade_name');
+    const clientColumns = 'id, legal_name, trade_name, cnpj, email, phone, portal, notification_recipients, notification_cc, notification_subject, notification_body';
+    const { data: clientRows, error: clientsError } = await supabase.from('clients').select(clientColumns).eq('organization_id', memberships[0].organization_id).order('trade_name');
     if (!clientsError && clientRows) setClients(clientRows as Client[]);
+    else if (clientsError?.message.includes('notification_')) {
+      const fallback = await supabase.from('clients').select('id, legal_name, trade_name, cnpj, email, phone, portal').eq('organization_id', memberships[0].organization_id).order('trade_name');
+      if (!fallback.error && fallback.data) setClients(fallback.data as Client[]);
+    }
     const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
     if (!error && data) setOrders(data as Order[]);
   }
@@ -157,7 +202,7 @@ export default function Home() {
     setEditingOrderId(null);
     setForm({ number: '', clientId: '', portal: activePortalNames[0] || 'TempoCerto', date: '' });
     setFormStatus('Pendente');
-    setXmlFileName(''); setXmlImportError(''); setXmlClientId(''); setXmlOrderNumber('');
+    setXmlFileName(''); setXmlImportError(''); setXmlClientId(''); setXmlOrderNumber(''); setXmlNewOrderDetails({ orderNumber: '', itemCount: 0, itemQuantity: 0, purchaseOrder: '' });
     setShowXmlImport(true);
   }
 
@@ -165,23 +210,20 @@ export default function Home() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    setXmlImportError(''); setXmlClientId(''); setXmlOrderNumber(''); setXmlFileName(file.name);
+    setXmlImportError(''); setXmlClientId(''); setXmlOrderNumber(''); setXmlNewOrderDetails({ orderNumber: '', itemCount: 0, itemQuantity: 0, purchaseOrder: '' }); setXmlFileName(file.name);
     if (!file.name.toLowerCase().endsWith('.xml')) { setXmlImportError('Selecione um arquivo com extensão .xml.'); return; }
     if (file.size > 5 * 1024 * 1024) { setXmlImportError('O XML deve ter no máximo 5 MB.'); return; }
     try {
       const source = await file.text();
       const documentXml = new DOMParser().parseFromString(source, 'application/xml');
       if (documentXml.querySelector('parsererror')) { setXmlImportError('Não foi possível ler o XML. Verifique se o arquivo está válido.'); return; }
+      const details = extractXmlOrderDetails(documentXml);
+      setXmlNewOrderDetails(details);
       const nodes = Array.from(documentXml.getElementsByTagName('*'));
       const cnpjs = nodes.filter(node => node.localName.toLowerCase() === 'cnpj').map(node => normalizeCnpj(node.textContent || '')).filter(value => value.length === 14);
       const foundClients = clients.filter(client => cnpjs.includes(normalizeCnpj(client.cnpj)));
       const uniqueClients = Array.from(new Map(foundClients.map(client => [client.id, client])).values());
-      const numberTags = ['numeropedido', 'npedido', 'numpedido', 'xped', 'nped', 'nnf', 'nct', 'ndf', 'numero'];
-      let extractedNumber = '';
-      for (const tag of numberTags) {
-        const value = nodes.find(node => node.localName.toLowerCase() === tag && node.textContent?.trim())?.textContent?.trim();
-        if (value) { extractedNumber = value; break; }
-      }
+      const extractedNumber = details.orderNumber;
       setXmlOrderNumber(extractedNumber);
       if (uniqueClients.length !== 1) {
         setXmlImportError(uniqueClients.length ? 'O XML corresponde a mais de um cliente cadastrado. Revise os CNPJs do arquivo.' : 'Nenhum CNPJ do XML corresponde a um cliente cadastrado. Cadastre o cliente ou confira o XML.');
@@ -196,28 +238,137 @@ export default function Home() {
     }
   }
 
+  function openOrderXml(order: Order) {
+    setOrderXmlTarget(order); setOrderXmlFileName(''); setOrderXmlError('');
+    setOrderXmlDraft({ orderNumber: order.xml_order_number || '', itemCount: order.xml_item_count || 0, itemQuantity: order.xml_item_quantity || 0, purchaseOrder: order.xml_purchase_order || '' });
+  }
+
+  async function handleOrderXmlUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (!file) return;
+    setOrderXmlFileName(file.name); setOrderXmlError('');
+    if (!file.name.toLowerCase().endsWith('.xml')) { setOrderXmlError('Selecione um arquivo com extensão .xml.'); return; }
+    if (file.size > 5 * 1024 * 1024) { setOrderXmlError('O XML deve ter no máximo 5 MB.'); return; }
+    try {
+      const documentXml = new DOMParser().parseFromString(await file.text(), 'application/xml');
+      if (documentXml.querySelector('parsererror')) throw new Error('O arquivo XML está inválido ou incompleto.');
+      setOrderXmlDraft(extractXmlOrderDetails(documentXml));
+    } catch (error) { setOrderXmlError(error instanceof Error ? error.message : 'Não foi possível ler os dados do XML.'); }
+  }
+
+  async function saveOrderXml() {
+    if (!orderXmlTarget) return;
+    if (!orderXmlDraft.orderNumber.trim()) { setOrderXmlError('Não encontrei o número do pedido no XML. Informe o número para continuar.'); return; }
+    setSavingOrderXml(true); setOrderXmlError('');
+    const xmlFields = { xml_order_number: orderXmlDraft.orderNumber.trim(), xml_item_count: Math.max(0, Math.trunc(orderXmlDraft.itemCount)), xml_item_quantity: Math.max(0, orderXmlDraft.itemQuantity), xml_purchase_order: orderXmlDraft.purchaseOrder.trim() || null };
+    try {
+      if (supabase && authenticated) {
+        if (!organizationId) { setOrderXmlError('Sua organização ainda está carregando. Tente novamente.'); return; }
+        const { error } = await supabase.from('orders').update(xmlFields).eq('id', orderXmlTarget.id).eq('organization_id', organizationId);
+        if (error) { setOrderXmlError(error.message.includes('xml_') || error.message.includes('schema cache') ? 'Aplique a migração de dados do XML no Supabase antes de salvar.' : 'Não foi possível salvar os dados deste XML. Confira a conexão e tente novamente.'); return; }
+      }
+      setOrders(previous => previous.map(order => order.id === orderXmlTarget.id ? { ...order, ...xmlFields } : order));
+      setOrderXmlTarget(null); setOrderXmlFileName(''); setToast(`Dados do XML salvos no pedido ${orderXmlTarget.order_number}.`);
+    } catch { setOrderXmlError('Não foi possível salvar os dados deste XML. Confira a conexão e tente novamente.'); }
+    finally { setSavingOrderXml(false); }
+  }
+
+  function openSpreadsheetImport() {
+    setSpreadsheetError(''); setSpreadsheetFileName(''); setSpreadsheetSheetName(''); setSpreadsheetColumns([]); setSpreadsheetRawRows([]); setSpreadsheetSelectedIds([]); setSpreadsheetClientOverrides({});
+    setSpreadsheetFilters({ group: 'Todos', seller: 'Todos', scheduled: '' });
+    setSpreadsheetMappings({ order: '', cnpj: '', client: '', group: '', seller: '', scheduled: '' });
+    setShowSpreadsheetImport(true);
+  }
+
+  async function handleSpreadsheetUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setSpreadsheetBusy(true); setSpreadsheetError(''); setSpreadsheetFileName(file.name); setSpreadsheetSelectedIds([]); setSpreadsheetClientOverrides({});
+    try {
+      if (!/\.xlsx?$/i.test(file.name)) throw new Error('Selecione uma planilha .xls ou .xlsx.');
+      if (file.size > 10 * 1024 * 1024) throw new Error('A planilha deve ter no máximo 10 MB.');
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) throw new Error('Não encontrei abas nessa planilha.');
+      const sheet = workbook.Sheets[sheetName];
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: false, dateNF: 'dd/mm/yyyy hh:mm' });
+      if (matrix.length < 2) throw new Error('A planilha precisa ter uma linha de cabeçalhos e pelo menos um pedido.');
+      const headerRow = matrix[0].map((value, index) => String(value || '').trim() || `Coluna ${index + 1}`);
+      const uniqueHeaders = headerRow.map((header, index) => headerRow.slice(0, index).includes(header) ? `${header} (${index + 1})` : header);
+      const rawRows = matrix.slice(1).map(row => Object.fromEntries(uniqueHeaders.map((header, index) => [header, String(row[index] ?? '').trim()])))
+        .filter(row => Object.values(row).some(value => value !== ''));
+      if (rawRows.length > 2500) throw new Error('A planilha tem mais de 2.500 linhas. Divida o arquivo em partes menores para revisar com segurança.');
+      if (!rawRows.length) throw new Error('Não encontrei linhas de pedidos nessa planilha.');
+      setSpreadsheetSheetName(sheetName); setSpreadsheetColumns(uniqueHeaders); setSpreadsheetRawRows(rawRows);
+      const mappings: ImportFilters = {
+        order: findSpreadsheetHeader(uniqueHeaders, ['numero do pedido', 'numero pedido', 'n pedido', 'nro pedido', 'pedido', 'ordem', 'order', 'order number']),
+        cnpj: findSpreadsheetHeader(uniqueHeaders, ['cnpj', 'cnpj cliente', 'documento cliente', 'cnpj tomador', 'cnpj destinatario']),
+        client: findSpreadsheetHeader(uniqueHeaders, ['cliente', 'nome cliente', 'razao social', 'nome fantasia', 'empresa', 'customer']),
+        group: findSpreadsheetHeader(uniqueHeaders, ['grupo do cliente', 'grupo cliente', 'grupo de cliente', 'grupo']),
+        seller: findSpreadsheetHeader(uniqueHeaders, ['vendedor', 'nome vendedor', 'representante', 'salesperson']),
+        scheduled: findSpreadsheetHeader(uniqueHeaders, ['agendado para', 'data agendada', 'data agendamento', 'data do agendamento', 'previsao agendamento', 'appointment date', 'agendado']),
+      };
+      setSpreadsheetMappings(mappings);
+      if (!mappings.order) setSpreadsheetError('Planilha carregada, mas não identifiquei automaticamente a coluna do número do pedido. Escolha essa coluna no mapeamento abaixo.');
+    } catch (error) {
+      setSpreadsheetRawRows([]); setSpreadsheetColumns([]);
+      setSpreadsheetError(error instanceof Error ? error.message : 'Não foi possível ler essa planilha.');
+    } finally { setSpreadsheetBusy(false); }
+  }
+
   async function saveOrder() {
     if (!form.number.trim()) return;
     if (!clients.length) { setToast('Cadastre um cliente antes de adicionar um pedido.'); return; }
     if (!form.clientId || !clients.some(client => client.id === form.clientId)) { setToast('Selecione o cliente relacionado ao pedido.'); return; }
     if (!activePortals[form.portal]) { setToast(`Ative o portal ${form.portal} antes de adicionar o pedido.`); return; }
     const originalOrder = orders.find(order => order.id === editingOrderId);
-    const newOrder: Order = { id: editingOrderId || crypto.randomUUID(), order_number: form.number.trim(), client_id: form.clientId, portal: form.portal, scheduled_at: form.date ? new Date(form.date).toISOString() : null, status: formStatus, created_at: originalOrder?.created_at || new Date().toISOString() };
+    const xmlFields = showXmlImport ? { xml_order_number: xmlNewOrderDetails.orderNumber.trim() || form.number.trim(), xml_item_count: xmlNewOrderDetails.itemCount, xml_item_quantity: xmlNewOrderDetails.itemQuantity, xml_purchase_order: xmlNewOrderDetails.purchaseOrder.trim() || null } : {};
+    const newOrder: Order = { ...(originalOrder || {}), ...xmlFields, id: editingOrderId || crypto.randomUUID(), order_number: form.number.trim(), client_id: form.clientId, portal: form.portal, scheduled_at: form.date ? new Date(form.date).toISOString() : null, status: formStatus, created_at: originalOrder?.created_at || new Date().toISOString() };
     if (supabase && authenticated) {
       if (!organizationId) { setToast('Sua organização ainda está sendo carregada. Tente novamente em instantes.'); return; }
-      const orderPayload = { order_number: newOrder.order_number, client_id: newOrder.client_id, portal: newOrder.portal, scheduled_at: newOrder.scheduled_at, status: newOrder.status };
+      const orderPayload = { order_number: newOrder.order_number, client_id: newOrder.client_id, portal: newOrder.portal, scheduled_at: newOrder.scheduled_at, status: newOrder.status, ...xmlFields };
       const query = editingOrderId
         ? supabase.from('orders').update(orderPayload).eq('id', editingOrderId).eq('organization_id', organizationId)
         : supabase.from('orders').insert({ organization_id: organizationId, ...orderPayload });
       const { data, error } = await query.select().single();
-      if (error) { setToast(error.message); return; } if (data) newOrder.id = data.id;
+      if (error) { setToast(error.message.includes('xml_') || error.message.includes('schema cache') ? 'Aplique a migração de dados do XML no Supabase antes de gerar pedidos por XML.' : error.message); return; } if (data) newOrder.id = data.id;
     }
     setOrders(previous => editingOrderId ? previous.map(order => order.id === editingOrderId ? newOrder : order) : [newOrder, ...previous]);
     const wasEditing = !!editingOrderId;
-    setShowForm(false); setShowXmlImport(false); setEditingOrderId(null); setXmlFileName(''); setXmlClientId(''); setXmlOrderNumber(''); setForm({ number: '', clientId: '', portal: clients[0]?.portal || 'TempoCerto', date: '' }); setFormStatus('Pendente'); setToast(wasEditing ? 'Pedido atualizado.' : 'Pedido adicionado à fila de integração.');
+    setShowForm(false); setShowXmlImport(false); setEditingOrderId(null); setXmlFileName(''); setXmlClientId(''); setXmlOrderNumber(''); setXmlNewOrderDetails({ orderNumber: '', itemCount: 0, itemQuantity: 0, purchaseOrder: '' }); setForm({ number: '', clientId: '', portal: clients[0]?.portal || 'TempoCerto', date: '' }); setFormStatus('Pendente'); setToast(wasEditing ? 'Pedido atualizado.' : 'Pedido adicionado à fila de integração.');
   }
 
   async function addOrder(event: React.FormEvent) { event.preventDefault(); await saveOrder(); }
+
+  function selectVisibleSpreadsheetOrders(checked: boolean) {
+    const visibleValidIds = visibleSpreadsheetOrders.filter(row => !row.issue).map(row => row.id);
+    setSpreadsheetSelectedIds(previous => checked
+      ? Array.from(new Set([...previous, ...visibleValidIds]))
+      : previous.filter(id => !visibleValidIds.includes(id)));
+  }
+
+  async function saveSelectedSpreadsheetOrders() {
+    if (!selectedSpreadsheetOrders.length) { setSpreadsheetError('Selecione ao menos um pedido válido para gravar.'); return; }
+    setSavingSpreadsheetOrders(true); setSpreadsheetError('');
+    const createdAt = new Date().toISOString();
+    const newOrders: Order[] = selectedSpreadsheetOrders.map(row => ({ id: crypto.randomUUID(), order_number: row.order_number, client_id: row.client_id, portal: row.portal, scheduled_at: row.scheduled_at, status: 'Pendente', created_at: createdAt }));
+    try {
+      if (supabase && authenticated) {
+        if (!organizationId) { setSpreadsheetError('Sua organização ainda está carregando. Tente novamente.'); return; }
+        const payload = selectedSpreadsheetOrders.map(row => ({ organization_id: organizationId, order_number: row.order_number, client_id: row.client_id, portal: row.portal, scheduled_at: row.scheduled_at, status: 'Pendente' as const }));
+        const { data, error } = await supabase.from('orders').insert(payload).select();
+        if (error) { setSpreadsheetError(`Não foi possível gravar os pedidos: ${error.message}`); return; }
+        if (data) newOrders.forEach((order, index) => { if (data[index]?.id) order.id = data[index].id; });
+      }
+      setOrders(previous => [...newOrders.reverse(), ...previous]);
+      setSpreadsheetSelectedIds([]); setShowSpreadsheetImport(false); setSpreadsheetRawRows([]); setSpreadsheetFileName('');
+      setToast(`${newOrders.length} ${newOrders.length === 1 ? 'pedido importado' : 'pedidos importados'} com sucesso.`);
+    } catch {
+      setSpreadsheetError('Ocorreu um erro ao gravar a planilha. Confira a conexão e tente novamente.');
+    } finally { setSavingSpreadsheetOrders(false); }
+  }
 
   function openOrderEditor(order: Order) {
     setEditingOrderId(order.id);
@@ -235,7 +386,8 @@ export default function Home() {
     if (clients.some(client => client.id !== editingClientId && normalizeCnpj(client.cnpj) === normalizedCnpj)) { setClientFormError('Já existe um cliente com esse CNPJ nesta organização.'); return; }
     if (!activePortals[clientDraft.portal]) { setClientFormError('Ative o portal escolhido antes de cadastrar o cliente.'); return; }
     setSavingClient(true);
-    const newClient: Client = { id: editingClientId || crypto.randomUUID(), legal_name: clientDraft.legal_name.trim(), trade_name: clientDraft.trade_name.trim(), cnpj: normalizedCnpj, email: clientDraft.email.trim(), phone: clientDraft.phone.trim(), portal: clientDraft.portal };
+    const previousClient = editingClientId ? clients.find(client => client.id === editingClientId) : undefined;
+    const newClient: Client = { ...(previousClient || {}), id: editingClientId || crypto.randomUUID(), legal_name: clientDraft.legal_name.trim(), trade_name: clientDraft.trade_name.trim(), cnpj: normalizedCnpj, email: clientDraft.email.trim(), phone: clientDraft.phone.trim(), portal: clientDraft.portal };
     if (supabase && authenticated) {
       if (!organizationId) { setClientFormError('A organização ainda está carregando. Tente novamente.'); setSavingClient(false); return; }
       const clientQuery = editingClientId
@@ -263,6 +415,29 @@ export default function Home() {
     setEditingClientId(client.id);
     setClientDraft({ legal_name: client.legal_name, trade_name: client.trade_name, cnpj: client.cnpj, email: client.email, phone: client.phone, portal: client.portal });
     setShowClientForm(true);
+  }
+
+  async function saveClientEmailTemplate(client: Client, recipientsText: string, ccText: string, subject: string, body: string) {
+    const splitEmails = (value: string) => Array.from(new Set(value.split(/[;,\n]+/).map(email => email.trim().toLowerCase()).filter(Boolean)));
+    const recipients = splitEmails(recipientsText);
+    const cc = splitEmails(ccText);
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!recipients.length) { setEmailTemplateError('Informe pelo menos um e-mail responsável.'); return; }
+    if ([...recipients, ...cc].some(email => !emailPattern.test(email))) { setEmailTemplateError('Confira os endereços de e-mail informados.'); return; }
+    if (!subject.trim() || !body.trim()) { setEmailTemplateError('Preencha o título e o corpo do e-mail.'); return; }
+    setSavingEmailTemplate(true); setEmailTemplateError('');
+    const updates = { notification_recipients: recipients, notification_cc: cc, notification_subject: subject.trim(), notification_body: body.trim() };
+    try {
+      if (supabase && authenticated) {
+        if (!organizationId) { setEmailTemplateError('Sua organização ainda está carregando. Tente novamente.'); return; }
+        const { error } = await supabase.from('clients').update(updates).eq('id', client.id).eq('organization_id', organizationId);
+        if (error) { setEmailTemplateError(error.message.includes('notification_') || error.message.includes('schema cache') ? 'Aplique a migração de configuração de e-mail no Supabase antes de salvar.' : 'Não foi possível salvar esta configuração. Confira sua conexão e tente novamente.'); return; }
+      }
+      const updatedClient = { ...client, ...updates };
+      setClients(previous => previous.map(item => item.id === client.id ? updatedClient : item));
+      setEmailTemplateClient(null); setToast(`E-mail padrão de ${client.trade_name} salvo.`);
+    } catch { setEmailTemplateError('Não foi possível salvar esta configuração. Confira sua conexão e tente novamente.'); }
+    finally { setSavingEmailTemplate(false); }
   }
 
   async function togglePortal(portal: Portal) {
@@ -325,6 +500,40 @@ export default function Home() {
   const maxPortalSchedule = Math.max(1, ...portalScheduleStats.map(portal => portal.count));
   const activePortalNames = portals.filter(portal => activePortals[portal.name]).map(portal => portal.name);
   const clientMatches = clients.filter(client => `${client.legal_name} ${client.trade_name} ${client.cnpj} ${client.email}`.toLocaleLowerCase('pt-BR').includes(clientQuery.toLocaleLowerCase('pt-BR')));
+  const mappedOrderNumbers = spreadsheetRawRows.map(row => spreadsheetMappings.order ? (row[spreadsheetMappings.order] || '').trim().toLocaleLowerCase('pt-BR') : '');
+  const importNumberCounts = new Map<string, number>();
+  mappedOrderNumbers.forEach(number => { if (number) importNumberCounts.set(number, (importNumberCounts.get(number) || 0) + 1); });
+  const spreadsheetOrders: ImportOrderRow[] = spreadsheetRawRows.map((values, index) => {
+    const id = `spreadsheet-row-${index}`;
+    const order_number = spreadsheetMappings.order ? (values[spreadsheetMappings.order] || '').trim() : '';
+    const cnpjValue = spreadsheetMappings.cnpj ? values[spreadsheetMappings.cnpj] || '' : Object.values(values).find(value => normalizeCnpj(value).length === 14) || '';
+    const normalizedCnpj = normalizeCnpj(cnpjValue);
+    const clientName = spreadsheetMappings.client ? normalizeSpreadsheetText(values[spreadsheetMappings.client] || '') : '';
+    const overrideClient = spreadsheetClientOverrides[id] ? clients.find(client => client.id === spreadsheetClientOverrides[id]) : undefined;
+    const client = overrideClient || clients.find(item => normalizedCnpj.length === 14 && normalizeCnpj(item.cnpj) === normalizedCnpj)
+      || (clientName ? clients.find(item => [item.trade_name, item.legal_name].some(name => normalizeSpreadsheetText(name) === clientName)) : undefined);
+    const group = spreadsheetMappings.group ? values[spreadsheetMappings.group] || '' : '';
+    const seller = spreadsheetMappings.seller ? values[spreadsheetMappings.seller] || '' : '';
+    const scheduled = spreadsheetMappings.scheduled ? values[spreadsheetMappings.scheduled] || '' : '';
+    const parsedDate = scheduled ? parseSpreadsheetDate(scheduled) : null;
+    const issueParts: string[] = [];
+    if (!spreadsheetMappings.order) issueParts.push('Mapeie a coluna do pedido');
+    else if (!order_number) issueParts.push('Número do pedido vazio');
+    if (order_number && (orders.some(order => order.order_number.trim().toLocaleLowerCase('pt-BR') === order_number.toLocaleLowerCase('pt-BR') && order.client_id === client?.id) || (importNumberCounts.get(order_number.toLocaleLowerCase('pt-BR')) || 0) > 1)) issueParts.push('Pedido duplicado');
+    if (!client) issueParts.push('Associe a um cliente cadastrado');
+    if (client && !activePortals[client.portal]) issueParts.push(`Ative o portal ${client.portal}`);
+    if (scheduled && !parsedDate) issueParts.push('Data de agendamento não reconhecida');
+    return { id, values, order_number, client_id: client?.id || '', portal: client?.portal || '', group, seller, scheduled, scheduled_at: parsedDate?.toISOString() || null, selected: spreadsheetSelectedIds.includes(id), issue: issueParts.join(' · ') };
+  });
+  const visibleSpreadsheetOrders = spreadsheetOrders.filter(row =>
+    (spreadsheetFilters.group === 'Todos' || row.group === spreadsheetFilters.group)
+    && (spreadsheetFilters.seller === 'Todos' || row.seller === spreadsheetFilters.seller)
+    && (!spreadsheetFilters.scheduled || (parseSpreadsheetDate(row.scheduled) ? localDateKey(parseSpreadsheetDate(row.scheduled)!) === spreadsheetFilters.scheduled : false))
+  );
+  const validSpreadsheetOrders = spreadsheetOrders.filter(row => !row.issue);
+  const selectedSpreadsheetOrders = spreadsheetOrders.filter(row => row.selected && !row.issue);
+  const importGroups = Array.from(new Set(spreadsheetOrders.map(row => row.group).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const importSellers = Array.from(new Set(spreadsheetOrders.map(row => row.seller).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
   function selectVisibleOrders(checked: boolean) {
     const visibleIds = filtered.map(order => order.id);
@@ -369,7 +578,7 @@ export default function Home() {
     <section className="main-area">
       <header className="topbar"><div className="breadcrumb"><Menu className="mobile-menu" size={20}/><span>Workspace</span><span className="crumb-slash">/</span><strong>{activeModule === 'overview' ? 'Dashboard' : activeModule === 'integrations' ? 'Integrações' : activeModule === 'clients' ? 'Clientes' : activeModule === 'reports' ? 'Relatórios' : 'Portais'}</strong></div><div className="top-actions"><div className="secure-pill"><ShieldCheck size={14}/> Ambiente seguro</div><button className="icon-button" aria-label="Ajuda" onClick={() => setToast('Central de ajuda em breve.')}><CircleHelp size={18}/></button><div className="top-avatar">{userEmail.slice(0,1).toUpperCase()}</div></div></header>
       <div className="content">
-        <div className="welcome-row"><div><div className="eyebrow"><span className="live-dot"/> {dateLabel}</div><h1>{activeModule === 'overview' ? 'Dashboard' : activeModule === 'integrations' ? 'Integrações' : activeModule === 'clients' ? 'Clientes' : activeModule === 'reports' ? 'Relatórios' : 'Portais'} </h1><p className="subtitle">{activeModule === 'overview' ? 'Acompanhe os principais indicadores da sua operação.' : activeModule === 'integrations' ? 'Gerencie seus pedidos e acompanhe os agendamentos.' : activeModule === 'clients' ? 'Cadastre clientes e defina o portal padrão de cada operação.' : activeModule === 'reports' ? 'Analise os pedidos e resultados registrados por portal.' : 'Ative somente os portais que sua empresa utiliza.'}</p></div>{activeModule === 'integrations' && <div className="integration-header-actions"><button className="outline-button xml-upload-trigger" onClick={openXmlImport}><FileUp size={16}/> Upload XML</button><button className="primary-button" onClick={() => { setEditingOrderId(null); setFormStatus('Pendente'); setForm({ number: '', clientId: clients[0]?.id || '', portal: clients[0]?.portal || activePortalNames[0] || 'TempoCerto', date: '' }); setShowForm(true); }}><Plus size={17}/> Novo pedido</button></div>}{activeModule === 'clients' && <button className="primary-button" onClick={() => { setClientFormError(''); setClientDraft(previous => ({ ...previous, portal: activePortalNames[0] || previous.portal })); setShowClientForm(true); }}><Plus size={17}/> Cadastrar cliente</button>}</div>
+        <div className="welcome-row"><div><div className="eyebrow"><span className="live-dot"/> {dateLabel}</div><h1>{activeModule === 'overview' ? 'Dashboard' : activeModule === 'integrations' ? 'Integrações' : activeModule === 'clients' ? 'Clientes' : activeModule === 'reports' ? 'Relatórios' : 'Portais'} </h1><p className="subtitle">{activeModule === 'overview' ? 'Acompanhe os principais indicadores da sua operação.' : activeModule === 'integrations' ? 'Gerencie seus pedidos e acompanhe os agendamentos.' : activeModule === 'clients' ? 'Cadastre clientes e defina o portal padrão de cada operação.' : activeModule === 'reports' ? 'Analise os pedidos e resultados registrados por portal.' : 'Ative somente os portais que sua empresa utiliza.'}</p></div>{activeModule === 'integrations' && <div className="integration-header-actions"><button className="outline-button xml-upload-trigger" onClick={openXmlImport}><FileUp size={16}/> Upload XML</button><button className="outline-button spreadsheet-upload-trigger" onClick={openSpreadsheetImport}><FileUp size={16}/> Ler XLS</button><button className="primary-button" onClick={() => { setEditingOrderId(null); setFormStatus('Pendente'); setForm({ number: '', clientId: clients[0]?.id || '', portal: clients[0]?.portal || activePortalNames[0] || 'TempoCerto', date: '' }); setShowForm(true); }}><Plus size={17}/> Novo pedido</button></div>}{activeModule === 'clients' && <button className="primary-button" onClick={() => { setClientFormError(''); setClientDraft(previous => ({ ...previous, portal: activePortalNames[0] || previous.portal })); setShowClientForm(true); }}><Plus size={17}/> Cadastrar cliente</button>}</div>
         {activeModule === 'overview' && <div className="metric-grid">
           <Metric title="Pedidos no total" value={String(orders.length).padStart(2,'0')} note="na sua fila de integração" icon={<Truck size={17}/>} tone="blue" trend="Fila atual"/>
           <Metric title="Agendados" value={String(scheduledCount).padStart(2,'0')} note="pedidos confirmados" icon={<Check size={17}/>} tone="green" trend={`${orders.length ? Math.round(scheduledCount/orders.length*100) : 0}%`}/>
@@ -380,13 +589,13 @@ export default function Home() {
         {activeModule === 'integrations' && <section className="orders-section module-orders" id="orders"><div className="section-heading order-title"><div><h2>Pedidos</h2><p>Consulte e publique pedidos nos portais ativos.</p></div><button className="active-summary clickable" onClick={() => setActiveModule('portals')}><span className="footer-dot"/> {Object.values(activePortals).filter(Boolean).length} portais ativos <ArrowRight size={14}/></button></div>
           <div className="table-card"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar pedido ou portal..."/></div><div className="filters"><select value={portalFilter} onChange={e => setPortalFilter(e.target.value)}><option>Todos os portais</option>{portals.map(portal => <option key={portal.name}>{portal.name}</option>)}</select><select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}><option>Todos os status</option><option>Agendado</option><option>Pendente</option><option>Falhou</option></select></div></div>
             {selectedOrders.length > 0 && <div className="bulk-toolbar"><div className="bulk-selection-count"><strong>{selectedOrders.length}</strong> {selectedOrders.length === 1 ? 'pedido selecionado' : 'pedidos selecionados'}</div><label className="bulk-portal-select">Portal<select value={bulkPortalValue} onChange={event => setBulkPortal(event.target.value)}>{selectedPortals.map(portal => <option key={portal.name} value={portal.name} disabled={!activePortals[portal.name]}>{portal.name} · {selectedOrders.filter(order => order.portal === portal.name).length} pedidos{activePortals[portal.name] ? '' : ' (desativado)'}</option>)}</select></label><button className="primary-button bulk-publish" onClick={publishSelected} disabled={!bulkPortalOrders.length || !activePortals[bulkPortalValue]}><ExternalLink size={15}/> Abrir portal com {bulkPortalOrders.length}</button><button className="bulk-clear" onClick={() => setSelectedOrderIds([])}>Limpar seleção</button></div>}
-            <div className="table-scroll"><table className="selectable-orders"><thead><tr><th className="select-column"><input type="checkbox" aria-label="Selecionar todos os pedidos visíveis" checked={filtered.length > 0 && filtered.every(order => selectedOrderIds.includes(order.id))} onChange={event => selectVisibleOrders(event.target.checked)}/></th><th>PEDIDO</th><th>CLIENTE</th><th>PORTAL</th><th>DATA AGENDADA</th><th>STATUS</th><th className="action-head">AÇÃO</th></tr></thead><tbody>{filtered.map(order => <tr key={order.id}><td className="select-column"><input type="checkbox" aria-label={`Selecionar pedido ${order.order_number}`} checked={selectedOrderIds.includes(order.id)} onChange={event => setSelectedOrderIds(previous => event.target.checked ? Array.from(new Set([...previous, order.id])) : previous.filter(id => id !== order.id))}/></td><td><strong className="order-number">{order.order_number}</strong><small className="order-sub">Adicionado em {new Date(order.created_at).toLocaleDateString('pt-BR')}</small></td><td>{clients.find(client => client.id === order.client_id)?.trade_name || <span className="muted">Não vinculado</span>}</td><td><PortalMini portal={order.portal} portals={portals}/></td><td>{order.scheduled_at ? <span className="date-cell"><CalendarDays size={15}/>{new Date(order.scheduled_at).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span> : <span className="muted">Não definido</span>}</td><td><Status status={order.status}/></td><td><div className="order-row-actions"><button className="edit-client-button" onClick={() => openOrderEditor(order)} aria-label={`Editar pedido ${order.order_number}`}><Edit2 size={14}/> Editar</button><button className="publish-button" onClick={() => publish(order)} disabled={!activePortals[order.portal]}><ExternalLink size={14}/> {activePortals[order.portal] ? 'Publicar' : 'Desativado'}</button></div></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">Nenhum pedido encontrado.</div>}</div>
+            <div className="table-scroll"><table className="selectable-orders"><thead><tr><th className="select-column"><input type="checkbox" aria-label="Selecionar todos os pedidos visíveis" checked={filtered.length > 0 && filtered.every(order => selectedOrderIds.includes(order.id))} onChange={event => selectVisibleOrders(event.target.checked)}/></th><th>PEDIDO</th><th>CLIENTE</th><th>PORTAL</th><th>DATA AGENDADA</th><th>STATUS</th><th className="action-head">AÇÃO</th></tr></thead><tbody>{filtered.map(order => <tr key={order.id}><td className="select-column"><input type="checkbox" aria-label={`Selecionar pedido ${order.order_number}`} checked={selectedOrderIds.includes(order.id)} onChange={event => setSelectedOrderIds(previous => event.target.checked ? Array.from(new Set([...previous, order.id])) : previous.filter(id => id !== order.id))}/></td><td><strong className="order-number">{order.order_number}</strong><small className="order-sub">Adicionado em {new Date(order.created_at).toLocaleDateString('pt-BR')}</small>{order.xml_order_number&&<small className="order-xml-summary" title={`Pedido XML ${order.xml_order_number} · ${order.xml_item_count||0} itens · Quantidade ${order.xml_item_quantity??0}${order.xml_purchase_order?` · OC ${order.xml_purchase_order}`:''}`}>XML: {order.xml_order_number} · {order.xml_item_count||0} itens / {Number(order.xml_item_quantity||0).toLocaleString('pt-BR')} un.{order.xml_purchase_order?` · OC ${order.xml_purchase_order}`:''}</small>}</td><td>{clients.find(client => client.id === order.client_id)?.trade_name || <span className="muted">Não vinculado</span>}</td><td><PortalMini portal={order.portal} portals={portals}/></td><td>{order.scheduled_at ? <span className="date-cell"><CalendarDays size={15}/>{new Date(order.scheduled_at).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span> : <span className="muted">Não definido</span>}</td><td><Status status={order.status}/></td><td><div className="order-row-actions"><button className="edit-client-button xml-order-button" onClick={() => openOrderXml(order)} aria-label={`Anexar ou atualizar XML do pedido ${order.order_number}`}><FileUp size={14}/>{order.xml_order_number?'Editar XML':'Anexar XML'}</button><button className="edit-client-button" onClick={() => openOrderEditor(order)} aria-label={`Editar pedido ${order.order_number}`}><Edit2 size={14}/> Editar</button><button className="publish-button" onClick={() => publish(order)} disabled={!activePortals[order.portal]}><ExternalLink size={14}/> {activePortals[order.portal] ? 'Publicar' : 'Desativado'}</button></div></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">Nenhum pedido encontrado.</div>}</div>
             <div className="table-footer"><span>Mostrando <strong>{filtered.length}</strong> de <strong>{orders.length}</strong> pedidos</span><button className="see-all" onClick={() => { setQuery(''); setPortalFilter('Todos os portais'); setStatusFilter('Todos os status'); }}>Limpar filtros <ArrowRight size={14}/></button></div>
           </div>
         </section>}
         {activeModule === 'clients' && <section className="clients-module">
           <div className="table-card"><div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={clientQuery} onChange={event => setClientQuery(event.target.value)} placeholder="Buscar por nome, CNPJ ou e-mail..."/></div><span className="active-summary"><Users size={13}/> {clients.length} {clients.length === 1 ? 'cliente' : 'clientes'}</span></div>
-            <div className="table-scroll"><table className="clients-table"><thead><tr><th>RAZÃO SOCIAL</th><th>NOME FANTASIA</th><th>CNPJ</th><th>CONTATO</th><th>PORTAL PADRÃO</th><th className="action-head">AÇÃO</th></tr></thead><tbody>{clientMatches.map(client => <tr key={client.id}><td><strong className="client-name">{client.legal_name}</strong></td><td>{client.trade_name}</td><td>{formatCnpj(client.cnpj)}</td><td><span className="client-contact">{client.email}<small>{client.phone}</small></span></td><td><PortalMini portal={client.portal} portals={portals}/></td><td><button className="edit-client-button" onClick={() => openClientEditor(client)} aria-label={`Editar cliente ${client.trade_name}`}><Edit2 size={14}/> Editar</button></td></tr>)}</tbody></table>{clientMatches.length === 0 && <div className="empty-state">{clients.length ? 'Nenhum cliente encontrado para essa busca.' : 'Cadastre o primeiro cliente para vincular os pedidos ao portal correto.'}</div>}</div><div className="table-footer"><span>Exibindo <strong>{clientMatches.length}</strong> de <strong>{clients.length}</strong> clientes</span><button className="see-all" onClick={() => { setClientQuery(''); setClientFormError(''); setEditingClientId(null); setClientDraft(previous => ({ legal_name: '', trade_name: '', cnpj: '', email: '', phone: '', portal: activePortalNames[0] || previous.portal })); setShowClientForm(true); }}>Cadastrar cliente <Plus size={14}/></button></div>
+            <div className="table-scroll"><table className="clients-table"><thead><tr><th>RAZÃO SOCIAL</th><th>NOME FANTASIA</th><th>CNPJ</th><th>CONTATO</th><th>PORTAL PADRÃO</th><th className="action-head">AÇÃO</th></tr></thead><tbody>{clientMatches.map(client => <tr key={client.id}><td><strong className="client-name">{client.legal_name}</strong></td><td>{client.trade_name}</td><td>{formatCnpj(client.cnpj)}</td><td><span className="client-contact">{client.email}<small>{client.phone}</small></span></td><td><PortalMini portal={client.portal} portals={portals}/></td><td><div className="client-row-actions"><button className="edit-client-button email-template-button" onClick={() => { setEmailTemplateClient(client); setEmailTemplateError(''); }} aria-label={`Configurar e-mail padrão de ${client.trade_name}`}><Mail size={14}/> E-mail padrão</button><button className="edit-client-button" onClick={() => openClientEditor(client)} aria-label={`Editar cliente ${client.trade_name}`}><Edit2 size={14}/> Editar</button></div></td></tr>)}</tbody></table>{clientMatches.length === 0 && <div className="empty-state">{clients.length ? 'Nenhum cliente encontrado para essa busca.' : 'Cadastre o primeiro cliente para vincular os pedidos ao portal correto.'}</div>}</div><div className="table-footer"><span>Exibindo <strong>{clientMatches.length}</strong> de <strong>{clients.length}</strong> clientes</span><button className="see-all" onClick={() => { setClientQuery(''); setClientFormError(''); setEditingClientId(null); setClientDraft(previous => ({ legal_name: '', trade_name: '', cnpj: '', email: '', phone: '', portal: activePortalNames[0] || previous.portal })); setShowClientForm(true); }}>Cadastrar cliente <Plus size={14}/></button></div>
           </div><div className="portal-info-note"><ShieldCheck size={17}/><span>O portal padrão do cliente será sugerido automaticamente ao criar um pedido. Você poderá selecionar outro portal ativo naquele pedido.</span></div>
         </section>}
         {activeModule === 'reports' && <section className="reports-module">
@@ -420,7 +629,10 @@ export default function Home() {
       </div>
     </section>
     {configPortal && <CredentialModal portal={configPortal} alreadyConfigured={configuredCredentials[configPortal]} saving={savingCredentials} error={credentialError} onClose={() => setConfigPortal(null)} onSave={savePortalCredentials}/>}
-    {showXmlImport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowXmlImport(false); }}><div className="modal xml-import-modal"><div className="modal-head"><div><span className="modal-icon"><FileUp size={18}/></span><h2>Novo pedido por XML</h2><p>Envie o XML para localizar o cliente pelo CNPJ cadastrado.</p></div><button className="icon-button" aria-label="Fechar" onClick={() => setShowXmlImport(false)}><X size={18}/></button></div><input ref={xmlInputRef} type="file" accept=".xml,application/xml,text/xml" className="xml-file-input" onChange={handleXmlUpload}/><button type="button" className="xml-dropzone" onClick={() => xmlInputRef.current?.click()}><FileUp size={22}/><strong>{xmlFileName || 'Selecionar arquivo XML'}</strong><span>Arquivo XML de até 5 MB</span></button>{xmlImportError && <div className="login-error xml-error">{xmlImportError}</div>}{xmlClientId && <div className="xml-match-card"><span className="xml-match-icon"><Check size={16}/></span><div><strong>Cliente identificado</strong><span>{clients.find(client => client.id === xmlClientId)?.trade_name} · CNPJ {formatCnpj(clients.find(client => client.id === xmlClientId)?.cnpj || '')}</span><small>Portal padrão: {clients.find(client => client.id === xmlClientId)?.portal}</small></div></div>}{xmlClientId && <><label>Número do pedido<input required placeholder="Extraído do XML ou informe manualmente" value={form.number} onChange={event => { setForm(previous => ({ ...previous, number: event.target.value })); setXmlOrderNumber(event.target.value); }}/></label><label>Data e hora agendada <span className="optional">Opcional</span><input type="datetime-local" value={form.date} onChange={event => setForm(previous => ({ ...previous, date: event.target.value }))}/></label><label>Portal vinculado<select value={form.portal} onChange={event => setForm(previous => ({ ...previous, portal: event.target.value }))}>{portals.map(portal => <option key={portal.name} value={portal.name} disabled={!activePortals[portal.name]}>{portal.name}{portal.name === clients.find(client => client.id === xmlClientId)?.portal ? ' · padrão do cliente' : ''}{activePortals[portal.name] ? '' : ' · desativado'}</option>)}</select></label><div className="form-note"><Activity size={15}/> O arquivo será lido no navegador e não será armazenado. O novo pedido será salvo como pendente.</div></>}<div className="modal-actions"><button type="button" className="outline-button" onClick={() => setShowXmlImport(false)}>Cancelar</button><button type="button" className="primary-button" disabled={!xmlClientId || !form.number.trim() || !activePortals[form.portal]} onClick={() => void saveOrder()}>Gravar novo pedido <ArrowRight size={16}/></button></div></div></div>}
+    {orderXmlTarget && <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!savingOrderXml)setOrderXmlTarget(null);}}><div className="modal order-xml-modal"><div className="modal-head"><div><span className="modal-icon"><FileUp size={18}/></span><h2>XML do pedido {orderXmlTarget.order_number}</h2><p>Anexe o XML para preencher os dados e confira antes de salvar.</p></div><button className="icon-button" aria-label="Fechar" disabled={savingOrderXml} onClick={()=>setOrderXmlTarget(null)}><X size={18}/></button></div><input ref={orderXmlInputRef} type="file" accept=".xml,application/xml,text/xml" className="xml-file-input" onChange={handleOrderXmlUpload}/><button type="button" className="xml-dropzone" disabled={savingOrderXml} onClick={()=>orderXmlInputRef.current?.click()}><FileUp size={22}/><strong>{orderXmlFileName||'Selecionar arquivo XML'}</strong><span>XML de até 5 MB · O arquivo será lido no navegador</span></button>{orderXmlError&&<div className="login-error xml-error">{orderXmlError}</div>}{(orderXmlFileName||orderXmlTarget.xml_order_number)&&<><div className="xml-order-preview-heading"><Check size={15}/><strong>{orderXmlFileName?'Dados identificados no XML':'Dados XML já salvos'}</strong><span>Confira ou ajuste os valores:</span></div><label>Número do pedido do XML<input required maxLength={160} value={orderXmlDraft.orderNumber} onChange={event=>setOrderXmlDraft(previous=>({...previous,orderNumber:event.target.value}))}/></label><div className="xml-order-fields"><label>Itens (linhas)<input type="number" min="0" step="1" value={orderXmlDraft.itemCount} onChange={event=>setOrderXmlDraft(previous=>({...previous,itemCount:Number(event.target.value)}))}/></label><label>Quantidade total (qCom)<input type="number" min="0" step="any" value={orderXmlDraft.itemQuantity} onChange={event=>setOrderXmlDraft(previous=>({...previous,itemQuantity:Number(event.target.value)}))}/></label></div><label>Ordem de compra<input maxLength={300} placeholder="Extraída das observações do XML" value={orderXmlDraft.purchaseOrder} onChange={event=>setOrderXmlDraft(previous=>({...previous,purchaseOrder:event.target.value}))}/></label><div className="form-note"><Activity size={15}/> A ordem de compra é localizada nas observações do XML; se não houver correspondência, você pode preencher este campo manualmente.</div></>}<div className="modal-actions"><button type="button" className="outline-button" disabled={savingOrderXml} onClick={()=>setOrderXmlTarget(null)}>Cancelar</button><button type="button" className="primary-button" disabled={savingOrderXml||!orderXmlDraft.orderNumber.trim()||(!orderXmlFileName&&!orderXmlTarget.xml_order_number)} onClick={()=>void saveOrderXml()}>{savingOrderXml?'Salvando...':'Salvar dados XML'} <Check size={15}/></button></div></div></div>}
+    {showSpreadsheetImport && <SpreadsheetImportModal fileName={spreadsheetFileName} sheetName={spreadsheetSheetName} columns={spreadsheetColumns} allRows={spreadsheetOrders} visibleRows={visibleSpreadsheetOrders} validCount={validSpreadsheetOrders.length} selectedCount={selectedSpreadsheetOrders.length} mappings={spreadsheetMappings} groups={importGroups} sellers={importSellers} filters={spreadsheetFilters} busy={spreadsheetBusy} saving={savingSpreadsheetOrders} error={spreadsheetError} fileInputRef={spreadsheetInputRef} clients={clients} onClose={() => setShowSpreadsheetImport(false)} onUpload={handleSpreadsheetUpload} onMap={(field, value) => { setSpreadsheetMappings(previous => ({ ...previous, [field]: value })); if (field === 'order') setSpreadsheetError(''); }} onFilter={(field, value) => setSpreadsheetFilters(previous => ({ ...previous, [field]: value }))} onSelectAll={selectVisibleSpreadsheetOrders} onSelectRow={(id, checked) => setSpreadsheetSelectedIds(previous => checked ? Array.from(new Set([...previous, id])) : previous.filter(item => item !== id))} onClientOverride={(id, clientId) => setSpreadsheetClientOverrides(previous => ({ ...previous, [id]: clientId }))} onSave={() => void saveSelectedSpreadsheetOrders()}/>}
+    {showXmlImport && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowXmlImport(false); }}><div className="modal xml-import-modal"><div className="modal-head"><div><span className="modal-icon"><FileUp size={18}/></span><h2>Novo pedido por XML</h2><p>Envie o XML para identificar o cliente e conferir os dados do pedido.</p></div><button className="icon-button" aria-label="Fechar" onClick={() => setShowXmlImport(false)}><X size={18}/></button></div><input ref={xmlInputRef} type="file" accept=".xml,application/xml,text/xml" className="xml-file-input" onChange={handleXmlUpload}/><button type="button" className="xml-dropzone" onClick={() => xmlInputRef.current?.click()}><FileUp size={22}/><strong>{xmlFileName || 'Selecionar arquivo XML'}</strong><span>Arquivo XML de até 5 MB</span></button>{xmlImportError && <div className="login-error xml-error">{xmlImportError}</div>}{xmlClientId && <div className="xml-match-card"><span className="xml-match-icon"><Check size={16}/></span><div><strong>Cliente identificado</strong><span>{clients.find(client => client.id === xmlClientId)?.trade_name} · CNPJ {formatCnpj(clients.find(client => client.id === xmlClientId)?.cnpj || '')}</span><small>Portal padrão: {clients.find(client => client.id === xmlClientId)?.portal}</small></div></div>}{xmlClientId && <><label>Número do pedido do XML<input required placeholder="Extraído do XML ou informe manualmente" value={form.number} onChange={event => { setForm(previous => ({ ...previous, number: event.target.value })); setXmlOrderNumber(event.target.value); setXmlNewOrderDetails(previous => ({ ...previous, orderNumber: event.target.value })); }}/></label><div className="xml-order-fields"><label>Itens (linhas)<input type="number" min="0" step="1" value={xmlNewOrderDetails.itemCount} onChange={event => setXmlNewOrderDetails(previous => ({ ...previous, itemCount: Number(event.target.value) }))}/></label><label>Quantidade total (qCom)<input type="number" min="0" step="any" value={xmlNewOrderDetails.itemQuantity} onChange={event => setXmlNewOrderDetails(previous => ({ ...previous, itemQuantity: Number(event.target.value) }))}/></label></div><label>Ordem de compra<input maxLength={300} placeholder="Extraída das observações do XML" value={xmlNewOrderDetails.purchaseOrder} onChange={event => setXmlNewOrderDetails(previous => ({ ...previous, purchaseOrder: event.target.value }))}/></label><label>Data e hora agendada <span className="optional">Opcional</span><input type="datetime-local" value={form.date} onChange={event => setForm(previous => ({ ...previous, date: event.target.value }))}/></label><label>Portal vinculado<select value={form.portal} onChange={event => setForm(previous => ({ ...previous, portal: event.target.value }))}>{portals.map(portal => <option key={portal.name} value={portal.name} disabled={!activePortals[portal.name]}>{portal.name}{portal.name === clients.find(client => client.id === xmlClientId)?.portal ? ' · padrão do cliente' : ''}{activePortals[portal.name] ? '' : ' · desativado'}</option>)}</select></label><div className="form-note"><Activity size={15}/> Confira os dados extraídos. O arquivo XML é lido no navegador e não será armazenado; o pedido será salvo como pendente.</div></>}<div className="modal-actions"><button type="button" className="outline-button" onClick={() => setShowXmlImport(false)}>Cancelar</button><button type="button" className="primary-button" disabled={!xmlClientId || !form.number.trim() || !activePortals[form.portal]} onClick={() => void saveOrder()}>Gravar novo pedido <ArrowRight size={16}/></button></div></div></div>}
+    {emailTemplateClient && <ClientEmailTemplateModal client={emailTemplateClient} saving={savingEmailTemplate} error={emailTemplateError} onClose={() => { if (!savingEmailTemplate) setEmailTemplateClient(null); }} onSave={(recipients,cc,subject,body) => void saveClientEmailTemplate(emailTemplateClient,recipients,cc,subject,body)} onReview={async text => { const response=await fetch('/api/review-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})}); const result=await response.json(); if(!response.ok) throw new Error(result.error||'Não foi possível revisar o texto.'); return result.text as string; }}/>} 
     {showClientForm && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !savingClient) { setShowClientForm(false); setEditingClientId(null); } }}><div className="modal client-modal"><div className="modal-head"><div><span className="modal-icon"><Users size={18}/></span><h2>{editingClientId ? 'Editar cliente' : 'Cadastrar cliente'}</h2><p>Os pedidos deste cliente usarão o portal padrão selecionado.</p></div><button className="icon-button" aria-label="Fechar" disabled={savingClient} onClick={() => { setShowClientForm(false); setEditingClientId(null); }}><X size={18}/></button></div><form onSubmit={addClient}><label>Razão social<input required maxLength={160} placeholder="Ex.: Transportadora Exemplo Ltda." value={clientDraft.legal_name} onChange={event => setClientDraft(previous => ({ ...previous, legal_name: event.target.value }))}/></label><label>Nome fantasia<input required maxLength={120} placeholder="Ex.: Exemplo Cargas" value={clientDraft.trade_name} onChange={event => setClientDraft(previous => ({ ...previous, trade_name: event.target.value }))}/></label><label>CNPJ<input required maxLength={18} placeholder="00.000.000/0000-00" value={clientDraft.cnpj} onChange={event => setClientDraft(previous => ({ ...previous, cnpj: event.target.value }))}/></label><div className="client-form-grid"><label>E-mail<input required type="email" maxLength={254} placeholder="contato@empresa.com.br" value={clientDraft.email} onChange={event => setClientDraft(previous => ({ ...previous, email: event.target.value }))}/></label><label>Telefone para contato<input required type="tel" maxLength={30} placeholder="(11) 90000-0000" value={clientDraft.phone} onChange={event => setClientDraft(previous => ({ ...previous, phone: event.target.value }))}/></label></div><label>Portal padrão<select required value={clientDraft.portal} onChange={event => setClientDraft(previous => ({ ...previous, portal: event.target.value }))} disabled={!activePortalNames.length}>{activePortalNames.map(portal => <option key={portal} value={portal}>{portal}</option>)}</select></label>{!activePortalNames.length && <div className="login-error">Ative um portal antes de cadastrar clientes.</div>}{clientFormError && <div className="login-error">{clientFormError}</div>}<div className="form-note"><ShieldCheck size={15}/> O cliente ficará disponível para todos os pedidos desta organização.</div><div className="modal-actions"><button type="button" className="outline-button" disabled={savingClient} onClick={() => { setShowClientForm(false); setEditingClientId(null); }}>Cancelar</button><button className="primary-button" type="submit" disabled={savingClient || !activePortalNames.length}>{savingClient ? 'Salvando...' : editingClientId ? 'Salvar alterações' : 'Cadastrar cliente'} <ArrowRight size={15}/></button></div></form></div></div>}
     {showPortalForm && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setShowPortalForm(false); }}><div className="modal"><div className="modal-head"><div><span className="modal-icon"><Plus size={18}/></span><h2>Adicionar portal</h2><p>Cadastre o portal que sua empresa quer acompanhar.</p></div><button className="icon-button" aria-label="Fechar" onClick={() => setShowPortalForm(false)}><X size={18}/></button></div><form onSubmit={addPortal}><label>Nome do portal<input required maxLength={60} placeholder="Ex.: Portal da transportadora" value={portalDraft.name} onChange={event => setPortalDraft(previous => ({ ...previous, name: event.target.value }))}/></label><label>Endereço do portal<input required type="url" placeholder="https://portal.empresa.com.br" value={portalDraft.url} onChange={event => setPortalDraft(previous => ({ ...previous, url: event.target.value }))}/></label><label>Descrição <span className="optional">Opcional</span><input maxLength={120} placeholder="Ex.: Agendamento de cargas" value={portalDraft.description} onChange={event => setPortalDraft(previous => ({ ...previous, description: event.target.value }))}/></label>{portalFormError && <div className="login-error">{portalFormError}</div>}<div className="form-note"><ShieldCheck size={15}/> O novo portal será criado como ativo para esta organização.</div><div className="modal-actions"><button type="button" className="outline-button" onClick={() => setShowPortalForm(false)}>Cancelar</button><button className="primary-button" type="submit">Cadastrar portal <ArrowRight size={15}/></button></div></form></div></div>}
     {showForm && <div className="modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) { setShowForm(false); setEditingOrderId(null); } }}><div className="modal"><div className="modal-head"><div><span className="modal-icon">{editingOrderId ? <Edit2 size={18}/> : <Plus size={18}/>}</span><h2>{editingOrderId ? 'Editar pedido' : 'Adicionar pedido'}</h2><p>{editingOrderId ? 'Atualize os dados deste pedido.' : 'Informe os dados para preparar a integração.'}</p></div><button className="icon-button" aria-label="Fechar" onClick={() => { setShowForm(false); setEditingOrderId(null); }}><X size={18}/></button></div><form onSubmit={addOrder}><label>Número do pedido<input required placeholder="Ex.: PED-2024-0843" value={form.number} onChange={event => setForm(previous => ({ ...previous, number: event.target.value }))}/></label><label>Cliente<select required value={form.clientId} onChange={event => { const client = clients.find(item => item.id === event.target.value); setForm(previous => ({ ...previous, clientId: event.target.value, portal: client?.portal || previous.portal })); }}><option value="" disabled>{clients.length ? 'Selecione o cliente' : 'Cadastre um cliente primeiro'}</option>{clients.map(client => <option key={client.id} value={client.id}>{client.trade_name} · {formatCnpj(client.cnpj)}</option>)}</select>{clients.length === 0 && <button type="button" className="inline-link" onClick={() => { setShowForm(false); setActiveModule('clients'); setShowClientForm(true); }}>Cadastrar cliente</button>}</label><label>Portal de integração<select required value={form.portal} onChange={event => setForm(previous => ({ ...previous, portal: event.target.value }))}>{portals.filter(portal => activePortals[portal.name]).map(portal => <option key={portal.name} value={portal.name}>{portal.name}{clients.find(client => client.id === form.clientId)?.portal === portal.name ? ' · padrão do cliente' : ''}</option>)}</select><span className="field-hint">Preenchido pelo portal padrão do cliente; você pode alterar.</span></label><label>Data e hora agendada <span className="optional">Opcional</span><input type="datetime-local" value={form.date} onChange={event => setForm(previous => ({ ...previous, date: event.target.value }))}/></label><label>Status<select value={formStatus} onChange={event => setFormStatus(event.target.value as Order['status'])}><option value="Pendente">Pendente</option><option value="Agendado">Agendado</option><option value="Falhou">Falhou</option></select></label><div className="form-note"><Activity size={15}/>{editingOrderId ? 'As alterações serão refletidas nos indicadores e relatórios.' : 'Seu pedido será salvo como pendente até a publicação no portal.'}</div><div className="modal-actions"><button type="button" className="outline-button" onClick={() => { setShowForm(false); setEditingOrderId(null); }}>Cancelar</button><button className="primary-button" type="submit" disabled={!clients.length}>{editingOrderId ? 'Salvar alterações' : 'Adicionar pedido'} <ArrowRight size={16}/></button></div></form></div></div>}
@@ -429,6 +641,41 @@ export default function Home() {
   </main>;
 }
 
+type SpreadsheetImportModalProps = {
+  fileName:string; sheetName:string; columns:string[]; allRows:ImportOrderRow[]; visibleRows:ImportOrderRow[]; validCount:number; selectedCount:number;
+  mappings:ImportFilters; groups:string[]; sellers:string[]; filters:{group:string;seller:string;scheduled:string}; busy:boolean;saving:boolean;error:string;
+  fileInputRef:React.RefObject<HTMLInputElement|null>;clients:Client[];onClose:()=>void;onUpload:(event:React.ChangeEvent<HTMLInputElement>)=>void;
+  onMap:(field:keyof ImportFilters,value:string)=>void;onFilter:(field:'group'|'seller'|'scheduled',value:string)=>void;onSelectAll:(checked:boolean)=>void;
+  onSelectRow:(id:string,checked:boolean)=>void;onClientOverride:(id:string,clientId:string)=>void;onSave:()=>void;
+};
+function SpreadsheetImportModal(props:SpreadsheetImportModalProps) {
+  const {fileName,sheetName,columns,allRows,visibleRows,validCount,selectedCount,mappings,groups,sellers,filters,busy,saving,error,fileInputRef,clients,onClose,onUpload,onMap,onFilter,onSelectAll,onSelectRow,onClientOverride,onSave}=props;
+  const validVisible=visibleRows.filter(row=>!row.issue);
+  const allVisibleSelected=validVisible.length>0&&validVisible.every(row=>row.selected);
+  const mappingFields:[keyof ImportFilters,string,boolean][]=[['order','Número do pedido',true],['cnpj','CNPJ do cliente',false],['client','Nome do cliente',false],['group','Grupo do cliente',false],['seller','Vendedor',false],['scheduled','Agendado para',false]];
+  return <div className="modal-backdrop spreadsheet-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!saving)onClose();}}><div className="modal spreadsheet-import-modal" role="dialog" aria-modal="true" aria-labelledby="spreadsheet-title">
+    <div className="modal-head"><div><span className="modal-icon"><FileUp size={18}/></span><h2 id="spreadsheet-title">Importar pedidos da planilha</h2><p>Confira as colunas, filtre e selecione os pedidos que serão adicionados.</p></div><button className="icon-button" aria-label="Fechar" disabled={saving} onClick={onClose}><X size={18}/></button></div>
+    <input ref={fileInputRef} type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="xml-file-input" onChange={onUpload}/>
+    <button type="button" className="xml-dropzone spreadsheet-dropzone" disabled={busy} onClick={()=>fileInputRef.current?.click()}><FileUp size={21}/><strong>{busy?'Lendo planilha...':fileName||'Selecionar arquivo XLS ou XLSX'}</strong><span>{fileName?`Aba: ${sheetName} · ${allRows.length} linhas encontradas`:'A leitura acontece neste navegador; limite de 10 MB e 2.500 linhas.'}</span></button>
+    {error&&<div className="login-error xml-error">{error}</div>}
+    {columns.length>0&&<>
+      <div className="spreadsheet-mapping"><div className="spreadsheet-section-title"><strong>Mapeamento das colunas</strong><span>Detectamos automaticamente alguns campos; revise se necessário.</span></div><div className="spreadsheet-mapping-grid">{mappingFields.map(([field,label,required])=><label key={field}>{label}{required&&<span className="required-mark"> *</span>}<select value={mappings[field]} onChange={event=>onMap(field,event.target.value)}><option value="">Não mapear</option>{columns.map(column=><option key={column} value={column}>{column}</option>)}</select></label>)}</div></div>
+      <div className="spreadsheet-filters"><label>Grupo do cliente<select value={filters.group} onChange={event=>onFilter('group',event.target.value)}><option value="Todos">Todos os grupos</option>{groups.map(group=><option key={group} value={group}>{group}</option>)}</select></label><label>Vendedor<select value={filters.seller} onChange={event=>onFilter('seller',event.target.value)}><option value="Todos">Todos os vendedores</option>{sellers.map(seller=><option key={seller} value={seller}>{seller}</option>)}</select></label><label>Agendado para<input type="date" value={filters.scheduled} onChange={event=>onFilter('scheduled',event.target.value)}/></label></div>
+      <div className="spreadsheet-summary"><span><strong>{allRows.length}</strong> na planilha</span><span><strong>{validCount}</strong> válidos</span><span><strong>{selectedCount}</strong> selecionados</span><label><input type="checkbox" checked={allVisibleSelected} disabled={!validVisible.length} onChange={event=>onSelectAll(event.target.checked)}/> Selecionar válidos visíveis ({validVisible.length})</label></div>
+      <div className="spreadsheet-table-wrap"><table className="spreadsheet-table"><thead><tr><th className="spreadsheet-check"></th>{columns.map(column=><th key={column}>{column}</th>)}<th>Cliente vinculado / portal</th><th>Validação</th></tr></thead><tbody>{visibleRows.map(row=><tr key={row.id}><td className="spreadsheet-check"><input aria-label={`Selecionar pedido ${row.order_number||'sem número'}`} type="checkbox" checked={row.selected&&!row.issue} disabled={!!row.issue} onChange={event=>onSelectRow(row.id,event.target.checked)}/></td>{columns.map(column=><td key={column} title={row.values[column]}>{row.values[column]||<span className="muted">—</span>}</td>)}<td className="spreadsheet-client-cell"><select aria-label="Associar cliente" value={row.client_id} onChange={event=>onClientOverride(row.id,event.target.value)}><option value="">Selecione cliente</option>{clients.map(client=><option key={client.id} value={client.id}>{client.trade_name} · {client.portal}</option>)}</select>{row.client_id&&<small>{row.portal} · portal padrão</small>}</td><td><span className={`spreadsheet-validation ${row.issue?'invalid':'valid'}`}>{row.issue||'Pronto para importar'}</span></td></tr>)}{visibleRows.length===0&&<tr><td colSpan={columns.length+4} className="spreadsheet-empty">Nenhum pedido corresponde aos filtros.</td></tr>}</tbody></table></div>
+      <div className="spreadsheet-modal-footer"><span>{validCount} válidos de {allRows.length} linhas analisadas</span><div className="modal-actions"><button type="button" className="outline-button" disabled={saving} onClick={onClose}>Cancelar</button><button type="button" className="primary-button" disabled={saving||!selectedCount} onClick={onSave}>{saving?'Gravando...':`Gravar ${selectedCount} ${selectedCount===1?'pedido':'pedidos'}`} <ArrowRight size={15}/></button></div></div>
+    </>}
+  </div></div>;
+}
+function ClientEmailTemplateModal({client,saving,error,onClose,onSave,onReview}:{client:Client;saving:boolean;error:string;onClose:()=>void;onSave:(recipients:string,cc:string,subject:string,body:string)=>void;onReview:(text:string)=>Promise<string>}) {
+  const [recipients,setRecipients]=useState((client.notification_recipients||[]).join(', '));
+  const [cc,setCc]=useState((client.notification_cc||[]).join(', '));
+  const [subject,setSubject]=useState(client.notification_subject||'Atualização do pedido {{numero_pedido}}');
+  const [body,setBody]=useState(client.notification_body||'Olá,\n\nInformamos que o pedido {{numero_pedido}} foi atualizado no portal {{portal}}.\nData de agendamento: {{data_agendamento}}.\n\nAtenciosamente,\nEquipe de Operações');
+  const [reviewing,setReviewing]=useState(false);const [reviewError,setReviewError]=useState('');
+  async function reviewBody(){if(!body.trim()){setReviewError('Escreva o corpo do e-mail antes de solicitar a revisão.');return;}setReviewing(true);setReviewError('');try{setBody(await onReview(body));}catch(err){setReviewError(err instanceof Error?err.message:'Não foi possível revisar o texto.');}finally{setReviewing(false);}}
+  return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!saving&&!reviewing)onClose();}}><div className="modal client-email-modal" role="dialog" aria-modal="true" aria-labelledby="client-email-title"><div className="modal-head"><div><span className="modal-icon"><Mail size={18}/></span><h2 id="client-email-title">E-mail padrão · {client.trade_name}</h2><p>Defina os destinatários e o modelo de mensagem para este cliente.</p></div><button className="icon-button" aria-label="Fechar" disabled={saving||reviewing} onClick={onClose}><X size={18}/></button></div><form onSubmit={event=>{event.preventDefault();onSave(recipients,cc,subject,body);}}><label>Emails responsáveis<input required maxLength={2000} placeholder="responsavel@empresa.com.br, outro@empresa.com.br" value={recipients} onChange={event=>setRecipients(event.target.value)}/><span className="field-hint">Separe os endereços por vírgula, ponto e vírgula ou linha.</span></label><label>Emails em cópia<input maxLength={2000} placeholder="copia@empresa.com.br" value={cc} onChange={event=>setCc(event.target.value)}/><span className="field-hint">Opcional. Também aceita vários endereços.</span></label><label>Título do e-mail<input required maxLength={200} placeholder="Atualização do pedido {{numero_pedido}}" value={subject} onChange={event=>setSubject(event.target.value)}/></label><label>Corpo do e-mail<textarea required maxLength={6000} rows={8} placeholder="Escreva a mensagem padrão..." value={body} onChange={event=>setBody(event.target.value)}/><span className="field-hint">Campos disponíveis: <code>{'{numero_pedido}'}</code>, <code>{'{portal}'}</code> e <code>{'{data_agendamento}'}</code>.</span></label><div className="email-review-row"><button type="button" className="outline-button email-review-button" disabled={reviewing||!body.trim()} onClick={()=>void reviewBody()}><Sparkles size={15}/>{reviewing?'Revisando texto...':'Revisar com IA'}</button><span>O corpo será enviado à IA para revisão; a sugestão pode ser editada antes de salvar.</span></div>{(reviewError||error)&&<div className="login-error">{reviewError||error}</div>}<div className="form-note"><ShieldCheck size={15}/> Este modelo fica salvo na configuração do cliente. O envio automático será ligado em uma etapa futura.</div><div className="modal-actions"><button type="button" className="outline-button" disabled={saving||reviewing} onClick={onClose}>Cancelar</button><button className="primary-button" type="submit" disabled={saving||reviewing}>{saving?'Salvando...':'Salvar e-mail padrão'} <Check size={15}/></button></div></form></div></div>;
+}
 function Metric({title,value,note,icon,tone,trend}:{title:string;value:string;note:string;icon:React.ReactNode;tone:string;trend:string}) { return <div className="metric-card"><div className="metric-top"><span>{title}</span><span className={`metric-icon ${tone}`}>{icon}</span></div><div className="metric-value">{value}</div><div className="metric-bottom"><span>{note}</span><span className={`metric-trend ${tone}`}>{tone==='green'?<ArrowUpRight size={13}/>:null}{trend}</span></div></div>; }
 function PortalCard({name,description,short,tone,href,onClick}:{name:string;description:string;short:string;tone:string;href:string;onClick:()=>void}) { return <button className="portal-card" onClick={onClick}><div className={`portal-logo ${tone}`}>{short}</div><div className="portal-info"><strong>{name}</strong><span>{description}</span></div><div className="connected"><span className="footer-dot"/> Ativo</div><ArrowUpRight className="portal-arrow" size={17}/><span className="sr-only">Abrir {href}</span></button>; }
 function PortalSetting({name,description,short,tone,active,credentialsConfigured,onToggle,onConfigure,onOpen}:{name:Portal;description:string;short:string;tone:string;active:boolean;credentialsConfigured:boolean;onToggle:()=>void;onConfigure:()=>void;onOpen:()=>void}) { return <article className={`portal-setting-card ${active ? '' : 'inactive'}`}><div className={`portal-logo ${tone}`}>{short}</div><div className="portal-setting-copy"><strong>{name}</strong><span>{description}</span><span className={`portal-state ${active ? 'on' : 'off'}`}><i/> {active ? 'Integração ativa' : 'Integração desativada'}</span><span className={`credential-state ${credentialsConfigured ? 'saved' : ''}`}>{credentialsConfigured ? 'Acesso configurado' : 'Acesso não configurado'}</span></div><button className="configure-portal" aria-label={`Configurar acesso ${name}`} onClick={onConfigure}><Settings2 size={14}/> Configurar</button><button className={`switch ${active ? 'on' : ''}`} role="switch" aria-checked={active} aria-label={`${active ? 'Desativar' : 'Ativar'} ${name}`} onClick={onToggle}><span/></button><button className="portal-open" onClick={onOpen}>Abrir portal <ArrowUpRight size={14}/></button></article>; }
