@@ -193,10 +193,24 @@ export default function Home() {
 
   async function signIn(email: string, password: string) {
     if (!supabase) { if (!demoMode) { setToast('A autenticação Supabase ainda não está configurada neste ambiente.'); return; } setUserEmail(email); setAuthenticated(true); setLoginOpen(false); setToast('Modo demonstração: configure o Supabase para habilitar o acesso seguro.'); return; }
-    const action = loginMode ? supabase.auth.signUp({ email, password }) : supabase.auth.signInWithPassword({ email, password });
-    const { error } = await action;
+    if (loginMode) {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) { setToast(error.message); return; }
+      if (!data.session) {
+        setToast('O Supabase ainda está solicitando confirmação por e-mail. Desative “Confirm email” em Authentication → Sign In / Providers → Email para liberar o acesso imediato.');
+        return;
+      }
+      setAuthenticated(true);
+      setUserEmail(data.session.user.email || email);
+      setLoginOpen(false);
+      setLoginMode(false);
+      setToast('Conta criada. Bem-vindo à plataforma!');
+      void loadOrders();
+      void loadCredentialStatus();
+      return;
+    }
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) setToast(error.message);
-    else if (loginMode) setToast('Conta criada. Confirme seu e-mail para entrar.');
   }
 
   async function signOut() {

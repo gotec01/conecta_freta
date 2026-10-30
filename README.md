@@ -15,7 +15,7 @@ Sem as variáveis do Supabase, a tela abre em modo demonstração e os pedidos f
 
 ## Banco e autenticação
 
-O MVP usa Supabase Auth e Postgres. A criação de conta cria uma organização pessoal e associa o usuário como owner. As tabelas de pedidos têm políticas RLS para limitar leituras e alterações aos membros da organização. Configure a confirmação de e-mail e URLs de redirecionamento no Supabase antes de publicar.
+O MVP usa Supabase Auth e Postgres. A criação de conta cria uma organização pessoal, associa o usuário como owner e inicia a sessão imediatamente. Para isso, desative **Confirm email** em **Authentication → Sign In / Providers → Email** no Supabase. As tabelas de pedidos têm políticas RLS para limitar leituras e alterações aos membros da organização.
 
 Para publicar na Vercel, configure as variáveis do Supabase e `PORTAL_CREDENTIALS_ENCRYPTION_KEY`. A revisão formal dos modelos de e-mail usa `OPENAI_API_KEY` no servidor e fica indisponível até essa variável ser configurada. `SUPABASE_SERVICE_ROLE_KEY` é usada somente na rota do servidor para guardar credenciais criptografadas; nunca a exponha no frontend.
 
