@@ -21,6 +21,10 @@ create table if not exists public.orders (
   order_number text not null,
   portal text not null check (length(trim(portal)) between 1 and 60),
   scheduled_at timestamptz,
+  xml_order_number text,
+  xml_item_count integer not null default 0,
+  xml_item_quantity numeric,
+  xml_purchase_order text,
   status text not null default 'Pendente' check (status in ('Agendado', 'Pendente', 'Falhou')),
   created_at timestamptz not null default now()
 );
@@ -46,6 +50,10 @@ create table if not exists public.clients (
   email text not null check (length(trim(email)) between 3 and 254),
   phone text not null check (length(trim(phone)) between 1 and 30),
   portal text not null,
+  notification_recipients text[] not null default '{}',
+  notification_cc text[] not null default '{}',
+  notification_subject text not null default '',
+  notification_body text not null default '',
   created_at timestamptz not null default now(),
   constraint clients_org_cnpj_unique unique (organization_id, cnpj),
   constraint clients_org_id_unique unique (organization_id, id),
