@@ -74,13 +74,15 @@ do $$ begin
 end $$;
 
 create table if not exists public.portal_credentials (
+  id uuid primary key default gen_random_uuid(),
   organization_id uuid not null references public.organizations(id) on delete cascade,
   portal text not null check (length(trim(portal)) between 1 and 60),
   username_ciphertext text not null,
   password_ciphertext text not null,
-  updated_at timestamptz not null default now(),
-  primary key (organization_id, portal)
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
+create index if not exists portal_credentials_org_portal_idx on public.portal_credentials (organization_id, portal, created_at);
 
 create or replace function public.create_personal_organization()
 returns trigger language plpgsql security definer set search_path = public as $$
@@ -157,17 +159,6 @@ begin
     where organization_id = p_organization_id and lower(portal) = lower(new_name)
   ) then
     raise exception 'A portal with this name already exists' using errcode = '23505';
-  end if;
-
-  if exists (
-    select 1 from public.portal_credentials old_credential
-    join public.portal_credentials new_credential
-      on new_credential.organization_id = old_credential.organization_id
-    where old_credential.organization_id = p_organization_id
-      and old_credential.portal = p_old_portal
-      and new_credential.portal = new_name
-  ) then
-    raise exception 'A credential already exists for the new portal name' using errcode = '23505';
   end if;
 
   insert into public.organization_portals (organization_id, portal, portal_url, description, active, updated_at)

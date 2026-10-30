@@ -1,4 +1,4 @@
-import { createCipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 export function encryptPortalCredential(value: string) {
   const encodedKey = process.env.PORTAL_CREDENTIALS_ENCRYPTION_KEY;
@@ -11,4 +11,16 @@ export function encryptPortalCredential(value: string) {
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   return [iv, cipher.getAuthTag(), ciphertext].map(part => part.toString('base64url')).join('.');
+}
+
+export function decryptPortalCredential(value: string) {
+  const encodedKey = process.env.PORTAL_CREDENTIALS_ENCRYPTION_KEY;
+  if (!encodedKey || !/^[0-9a-fA-F]{64}$/.test(encodedKey)) {
+    throw new Error('PORTAL_CREDENTIALS_ENCRYPTION_KEY must be a 32-byte hex key.');
+  }
+  const [encodedIv, encodedTag, encodedCiphertext, ...extra] = value.split('.');
+  if (!encodedIv || !encodedTag || !encodedCiphertext || extra.length) throw new Error('Invalid encrypted credential.');
+  const decipher = createDecipheriv('aes-256-gcm', Buffer.from(encodedKey, 'hex'), Buffer.from(encodedIv, 'base64url'));
+  decipher.setAuthTag(Buffer.from(encodedTag, 'base64url'));
+  return Buffer.concat([decipher.update(Buffer.from(encodedCiphertext, 'base64url')), decipher.final()]).toString('utf8');
 }
