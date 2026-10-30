@@ -499,8 +499,11 @@ export default function Home() {
     const nextActive = !activePortals[portal];
     if (supabase && authenticated) {
       if (!organizationId) { setToast('Sua organização ainda está sendo carregada.'); return; }
-      const { error } = await supabase.from('organization_portals').upsert({ organization_id: organizationId, portal, active: nextActive }, { onConflict: 'organization_id,portal' });
-      if (error) { setToast(error.message); return; }
+      try {
+        const { data, error } = await supabase.from('organization_portals').update({ active: nextActive, updated_at: new Date().toISOString() }).eq('organization_id', organizationId).eq('portal', portal).select('portal').maybeSingle();
+        if (error) { setToast(error.message); return; }
+        if (!data) { setToast('Não foi possível localizar este portal na sua organização.'); return; }
+      } catch { setToast('Não foi possível atualizar o portal. Confira sua conexão e tente novamente.'); return; }
     }
     setActivePortals(prev => ({ ...prev, [portal]: nextActive }));
     if (!nextActive && form.portal === portal) { const replacement = portals.find(item => item.name !== portal && activePortals[item.name]); if (replacement) setForm(prev => ({ ...prev, portal: replacement.name })); }
