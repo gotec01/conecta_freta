@@ -51,7 +51,7 @@ O projeto usa Next.js com App Router; a Vercel detecta o framework automaticamen
    - `SUPABASE_SERVICE_ROLE_KEY` como segredo do servidor
    - `PORTAL_CREDENTIALS_ENCRYPTION_KEY` como segredo do servidor
    - `OPENAI_API_KEY` como segredo do servidor (opcional; habilita a revisão formal dos modelos de e-mail)
-3. Use um projeto/banco Supabase de produção. Execute `supabase/schema.sql` em um banco novo; se estiver atualizando o MVP existente, aplique todas as migrações em `supabase/migrations/` em ordem. As migrações incluem clientes, modelos de e-mail, dados extraídos do XML (inclusive o número da nota fiscal), datas solicitadas e confirmadas, edição de portais e múltiplos acessos por portal. Não exponha `SUPABASE_SERVICE_ROLE_KEY` nem a chave de criptografia com prefixo `NEXT_PUBLIC_`.
+3. Use um projeto/banco Supabase de produção. Execute `supabase/schema.sql` em um banco novo; se estiver atualizando o MVP existente, aplique todas as migrações em `supabase/migrations/` em ordem. As migrações incluem clientes, modelos de e-mail, dados extraídos do XML (inclusive o número da nota fiscal), datas solicitadas e confirmadas, edição de portais, múltiplos acessos por portal e links públicos para confirmação de pedidos. Não exponha `SUPABASE_SERVICE_ROLE_KEY` nem a chave de criptografia com prefixo `NEXT_PUBLIC_`.
 4. Configure no Supabase a URL pública do site e os URLs permitidos para autenticação usando o domínio Vercel escolhido.
 5. Faça um Preview Deploy primeiro, confirme login, leitura/gravação de pedidos e armazenamento de credenciais, e então promova pelo fluxo do Git/Vercel.
 
