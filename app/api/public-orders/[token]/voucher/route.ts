@@ -78,9 +78,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
 
   const pathPrefix = `${result.order.organization_id}/${result.order.id}/`;
   const path = body.path;
+  const pathFile = path.startsWith(pathPrefix) ? path.slice(pathPrefix.length) : '';
   const uuidParts = pathFile.split('-');
   const isUuid = uuidParts.length === 5 && uuidParts.every(part => /^[0-9a-f]+$/i.test(part)) && uuidParts.map(part => part.length).join('-') === '8-4-4-4-12';
-  const pathFile = path.startsWith(pathPrefix) ? path.slice(pathPrefix.length) : '';
   const expectedPathExtension = expectedType === 'application/pdf' ? 'pdf' : 'jpg';
   if (!pathFile || !isUuid || pathFile.split('.').length !== 2 || pathFile.split('.')[1].toLowerCase() !== expectedPathExtension) {
     return NextResponse.json({ error: 'O arquivo não corresponde a este pedido.' }, { status: 400, headers: NO_STORE });
