@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createClient } from '../../lib/supabase';
 import { CalendarDays, Check, Clock3, FileText, PackageCheck, Paperclip, ShieldCheck, Truck, X } from 'lucide-react';
 
 type PublicOrder = {
@@ -89,15 +90,32 @@ export default function PublicOrderConfirmation({ token }: { token: string }) {
       setVoucherError('Selecione um arquivo PDF ou JPEG para anexar.');
       return;
     }
+    const extension = voucherFile.name.toLowerCase().split('.').pop();
+    const contentType = voucherFile.type || (extension === 'pdf' ? 'application/pdf' : 'image/jpeg');
     setVoucherBusy(true);
     setVoucherError('');
     setVoucherMessage('');
     try {
-      const formData = new FormData();
-      formData.append('voucher', voucherFile);
-      const response = await fetch(`/api/public-orders/${encodeURIComponent(token)}/voucher`, { method: 'POST', body: formData });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Não foi possível anexar o voucher.');
+      const prepareResponse = await fetch(`/api/public-orders/${encodeURIComponent(token)}/voucher`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_name: voucherFile.name, content_type: contentType, size: voucherFile.size }),
+      });
+      const prepared = await prepareResponse.json();
+      if (!prepareResponse.ok) throw new Error(prepared.error || 'Não foi possível preparar o envio do voucher.');
+
+      const supabase = createClient();
+      if (!supabase) throw new Error('Não foi possível conectar ao armazenamento do voucher.');
+      const { error: uploadError } = await supabase.storage.from('order-vouchers').uploadToSignedUrl(prepared.path, prepared.upload_token, voucherFile, { contentType });
+      if (uploadError) throw new Error('Não foi possível enviar o voucher. Tente novamente.');
+
+      const linkResponse = await fetch(`/api/public-orders/${encodeURIComponent(token)}/voucher`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: prepared.path, file_name: voucherFile.name, content_type: contentType }),
+      });
+      const result = await linkResponse.json();
+      if (!linkResponse.ok) throw new Error(result.error || 'Não foi possível vincular o voucher ao pedido.');
       setOrder(previous => previous ? {
         ...previous,
         has_voucher: true,
