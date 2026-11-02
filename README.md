@@ -24,7 +24,7 @@ Para publicar na Vercel, configure as variáveis do Supabase e `PORTAL_CREDENTIA
 - Cadastro e login por e-mail e senha.
 - Dashboard com indicadores operacionais.
 - Módulo Integrações com cadastro e filtro de pedidos por portal/status.
-- Importação de XML no módulo Integrações: leitura no navegador dos CNPJs e de um possível número do pedido, correspondência com cliente cadastrado e gravação do pedido com o portal padrão. O XML não é armazenado; formatos específicos de cada emissor podem exigir ajustes nos nomes de campos reconhecidos.
+- Anexo de voucher de entrega em PDF/JPEG por pedido, armazenado de forma privada no Supabase Storage e visualizado por link temporário. Aplique a migração `202611010001_order_vouchers.sql` antes de usar o recurso.\n- Importação de XML no módulo Integrações: leitura no navegador dos CNPJs e de um possível número do pedido, correspondência com cliente cadastrado e gravação do pedido com o portal padrão. O XML não é armazenado; formatos específicos de cada emissor podem exigir ajustes nos nomes de campos reconhecidos.
 - Seleção de vários pedidos e ação em massa agrupada pelo portal de cada pedido; a ação abre o painel correspondente para conclusão manual.
 - Módulo Portais com cadastro de novos portais (nome, endereço e descrição), além de ativação e configuração de acesso por organização. O catálogo fica em `organization_portals`.
 - Edição do nome, endereço e descrição dos portais; ao renomear, clientes, pedidos e credenciais continuam vinculados ao portal atualizado. Portais podem ser ativados ou desativados sem apagar clientes, pedidos ou acessos cadastrados.
