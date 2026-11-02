@@ -15,6 +15,8 @@ Sem as variáveis do Supabase, a tela abre em modo demonstração e os pedidos f
 
 ## Banco e autenticação
 
+Portais com envio por e-mail podem guardar um modelo XLS/XLSX privado. Aplique a migração `202611010002_portal_email_xls_model.sql` antes de configurar esse modo.
+
 O MVP usa Supabase Auth e Postgres. A criação de conta cria uma organização pessoal, associa o usuário como owner e inicia a sessão imediatamente. Para isso, desative **Confirm email** em **Authentication → Sign In / Providers → Email** no Supabase. As tabelas de pedidos têm políticas RLS para limitar leituras e alterações aos membros da organização.
 
 Para publicar na Vercel, configure as variáveis do Supabase e `PORTAL_CREDENTIALS_ENCRYPTION_KEY`. A revisão formal dos modelos de e-mail usa `OPENAI_API_KEY` no servidor e fica indisponível até essa variável ser configurada. `SUPABASE_SERVICE_ROLE_KEY` é usada somente na rota do servidor para guardar credenciais criptografadas; nunca a exponha no frontend.
