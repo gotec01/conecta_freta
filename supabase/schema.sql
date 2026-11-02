@@ -27,6 +27,9 @@ create table if not exists public.orders (
   xml_item_count integer not null default 0,
   xml_item_quantity numeric,
   xml_purchase_order text,
+  voucher_path text,
+  voucher_file_name text,
+  voucher_content_type text check (voucher_content_type is null or voucher_content_type in ('application/pdf', 'image/jpeg')),
   status text not null default 'Pendente' check (status in ('Agendado', 'Pendente', 'Falhou')),
   created_at timestamptz not null default now()
 );
@@ -207,3 +210,44 @@ grant select, insert, update on public.organization_portals to authenticated;
 grant select, insert, update on public.clients to authenticated;
 revoke all on public.portal_credentials from anon, authenticated;
 grant all on public.portal_credentials to service_role;
+
+-- Private delivery voucher files are stored separately and linked through orders.voucher_path.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('order-vouchers', 'order-vouchers', false, 10485760, array['application/pdf', 'image/jpeg'])
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Organization members can view order vouchers" on storage.objects;
+create policy "Organization members can view order vouchers" on storage.objects
+for select to authenticated using (
+  bucket_id = 'order-vouchers' and exists (
+    select 1 from public.orders o
+    where o.id::text = (storage.foldername(name))[2]
+      and o.organization_id::text = (storage.foldername(name))[1]
+      and public.is_org_member(o.organization_id)
+  )
+);
+
+drop policy if exists "Organization members can upload order vouchers" on storage.objects;
+create policy "Organization members can upload order vouchers" on storage.objects
+for insert to authenticated with check (
+  bucket_id = 'order-vouchers' and exists (
+    select 1 from public.orders o
+    where o.id::text = (storage.foldername(name))[2]
+      and o.organization_id::text = (storage.foldername(name))[1]
+      and public.is_org_member(o.organization_id)
+  )
+);
+
+drop policy if exists "Organization members can delete order vouchers" on storage.objects;
+create policy "Organization members can delete order vouchers" on storage.objects
+for delete to authenticated using (
+  bucket_id = 'order-vouchers' and exists (
+    select 1 from public.orders o
+    where o.id::text = (storage.foldername(name))[2]
+      and o.organization_id::text = (storage.foldername(name))[1]
+      and public.is_org_member(o.organization_id)
+  )
+);
