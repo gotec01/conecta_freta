@@ -10,7 +10,7 @@ const NO_STORE = { 'Cache-Control': 'no-store, max-age=0', 'Referrer-Policy': 'n
 
 function cleanFileName(value: unknown) {
   if (typeof value !== 'string') return '';
-  return value.split(/[\\/]/).pop()?.replace(/[\\u0000-\\u001f\\u007f]/g, '').trim().slice(0, 240) || '';
+  return value.split(/[\\/]/).pop()?.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 240) || '';
 }
 
 async function findPublicOrder(token: string) {
@@ -78,10 +78,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ token
 
   const pathPrefix = `${result.order.organization_id}/${result.order.id}/`;
   const path = body.path;
-  const pathPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.(pdf|jpg)$/i;
+  const uuidParts = pathFile.split('-');
+  const isUuid = uuidParts.length === 5 && uuidParts.every(part => /^[0-9a-f]+$/i.test(part)) && uuidParts.map(part => part.length).join('-') === '8-4-4-4-12';
   const pathFile = path.startsWith(pathPrefix) ? path.slice(pathPrefix.length) : '';
   const expectedPathExtension = expectedType === 'application/pdf' ? 'pdf' : 'jpg';
-  if (!pathFile || !pathPattern.test(pathFile) || !pathFile.toLowerCase().endsWith(`.${expectedPathExtension}`)) {
+  if (!pathFile || !isUuid || pathFile.split('.').length !== 2 || pathFile.split('.')[1].toLowerCase() !== expectedPathExtension) {
     return NextResponse.json({ error: 'O arquivo não corresponde a este pedido.' }, { status: 400, headers: NO_STORE });
   }
 
