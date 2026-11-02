@@ -65,3 +65,19 @@ saved-credential{display:grid;gap:9px;padding:13px 0;border-top:1px solid #edf0f
 
 .portal-form-modal{max-height:calc(100vh - 28px);overflow:auto}.portal-delivery-method{color:#4c806d;font-size:9px}.portal-template-dropzone{margin-top:3px}.saved-portal-template{display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #e1ece5;border-radius:6px;background:#f6faf7;color:#4b8067;font-size:10px}.portal-template-preview{margin-top:10px;padding:11px;border:1px solid #e4ece8;border-radius:8px;background:#fafcfb}.portal-template-preview-heading{display:grid;gap:4px;margin-bottom:9px}.portal-template-preview-heading strong{color:#3f5d68;font-size:11px}.portal-template-preview-heading span,.portal-template-preview>small{color:#87969c;font-size:9px}.portal-template-preview>small{display:block;margin-top:7px}.portal-template-table-wrap{max-width:100%;overflow:auto;border:1px solid #e6ece9;border-radius:6px;background:#fff}.portal-template-table-wrap table{width:100%;border-collapse:collapse;font-size:9px}.portal-template-table-wrap th,.portal-template-table-wrap td{max-width:190px;padding:7px 8px;border-bottom:1px solid #edf0ef;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.portal-template-table-wrap th{background:#f5f8f6;color:#56746a;font-weight:700}.portal-template-table-wrap td{color:#62757d}.portal-template-table-wrap tr:last-child td{border-bottom:0}
 @media(max-width:560px){.portal-form-modal{max-height:calc(100vh - 18px);padding:15px}.portal-template-preview{padding:8px}}
+
+.public-order-voucher>p{margin:0 0 10px;color:#87959a;font-size:10px;line-height:1.5}
+.public-order-voucher-current{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border:1px solid #dcece3;border-radius:7px;background:#f4faf6;color:#347c61}
+.public-order-voucher-current>svg{flex-shrink:0;margin-top:1px}
+.public-order-voucher-current>span{display:grid;gap:3px;min-width:0}
+.public-order-voucher-current strong{font-size:10px}
+.public-order-voucher-current small{overflow-wrap:anywhere;color:#71877d;font-size:9px}
+.public-order-voucher-input{display:none}
+.public-order-voucher-actions{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px}
+.public-order-voucher-actions button{min-height:36px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 11px;border-radius:6px;font:700 10px Manrope,Arial,sans-serif;cursor:pointer}
+.public-order-voucher-actions button:disabled{opacity:.55;cursor:not-allowed}
+.public-order-voucher-select{border:1px solid #dce7e1;background:#fff;color:#41675a}
+.public-order-voucher-save{border:1px solid #27795e;background:#287d61;color:#fff}
+.public-order-voucher-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#87959a;font-size:9px}
+.public-order-voucher .public-order-success,.public-order-voucher .public-order-error-message{margin-top:9px}
+@media(max-width:560px){.public-order-voucher-actions{grid-template-columns:1fr}.public-order-voucher-name{white-space:normal;overflow-wrap:anywhere}}
