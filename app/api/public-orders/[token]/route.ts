@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getPublicOrderLinkStore, hashPublicOrderToken } from '../../../lib/public-order-links';
 
-const ORDER_FIELDS = 'id, organization_id, order_number, client_id, portal, requested_at, confirmed_at, status, created_at, xml_order_number, xml_invoice_number, xml_item_count, xml_item_quantity, xml_purchase_order, public_link_viewed_at, client_confirmation, client_confirmation_at';
+const ORDER_FIELDS = 'id, organization_id, order_number, client_id, portal, requested_at, confirmed_at, status, created_at, xml_order_number, xml_invoice_number, xml_item_count, xml_item_quantity, xml_purchase_order, public_link_viewed_at, client_confirmation, client_confirmation_at, voucher_path, voucher_file_name, voucher_content_type';
 
 async function findOrder(token: string) {
   const store = getPublicOrderLinkStore();
@@ -45,6 +45,9 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
       xml_purchase_order: order.xml_purchase_order,
       client_confirmation: order.client_confirmation,
       client_confirmation_at: order.client_confirmation_at,
+      has_voucher: Boolean(order.voucher_path),
+      voucher_file_name: order.voucher_file_name,
+      voucher_content_type: order.voucher_content_type,
     },
   }, { headers: { 'Cache-Control': 'no-store, max-age=0', 'Referrer-Policy': 'no-referrer' } });
 }
